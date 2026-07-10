@@ -388,7 +388,7 @@ with tab_potentiel:
                 )
             else:
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Commune", parcelle.get("commune") or "—")
+                c1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
                 c2.metric("Section / numéro",
                           f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
                 c3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")

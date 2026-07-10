@@ -542,19 +542,38 @@ def get_parcelle_cadastrale(lat: float, lon: float) -> dict | None:
     cadastre — gratuit, sans clé). Retourne notamment la contenance (surface
     officielle de la parcelle en m²), utile pour estimer un foncier sous-
     exploité par rapport à la surface bâtie existante.
+
+    Essaie d'abord une géométrie ponctuelle (Point) ; si aucune parcelle
+    n'intersecte exactement ce point (cas fréquent en bordure de parcelle,
+    précision de géocodage), retente avec un petit polygone tampon (~5 m)
+    autour du point.
     """
     import requests, json
-    geom = json.dumps({"type": "Point", "coordinates": [lon, lat]})
-    try:
-        resp = requests.get(IGN_CADASTRE_URL, params={"geom": geom}, timeout=10)
+
+    def _query(geom_dict):
+        resp = requests.get(IGN_CADASTRE_URL, params={"geom": json.dumps(geom_dict)}, timeout=10)
         resp.raise_for_status()
-        features = resp.json().get("features", [])
+        return resp.json().get("features", [])
+
+    try:
+        features = _query({"type": "Point", "coordinates": [lon, lat]})
+        if not features:
+            # Repli : petit carré tampon (~5 m) autour du point, au cas où le
+            # point tombe pile sur une frontière de parcelle ou légèrement à
+            # côté (précision de géocodage).
+            d = 0.00005  # environ 5 m en latitude/longitude
+            square = [
+                [lon - d, lat - d], [lon + d, lat - d],
+                [lon + d, lat + d], [lon - d, lat + d], [lon - d, lat - d],
+            ]
+            features = _query({"type": "Polygon", "coordinates": [square]})
         if not features:
             return None
         props = features[0]["properties"]
         return {
             "id_parcelle": props.get("id"),
-            "commune": props.get("nom_com"),
+            "code_insee": props.get("commune"),
+            "prefixe": props.get("prefixe"),
             "section": props.get("section"),
             "numero": props.get("numero"),
             "contenance_m2": props.get("contenance"),
