@@ -38,6 +38,7 @@ Limites connues (prototype v0.1, à valider avant tout usage commercial) :
 import argparse
 import gzip
 import io
+import json
 import os
 import sys
 import unicodedata
@@ -230,6 +231,62 @@ def build_trend(agg: pd.DataFrame) -> pd.DataFrame:
             (trend[years[-1]] - trend[years[0]]) / trend[years[0]] * 100
         ).round(1)
     return trend.reset_index()
+
+
+def meta_path(dept: str) -> Path:
+    return OUTPUT_DIR / f"meta_{dept}.json"
+
+
+def load_meta(dept: str) -> dict | None:
+    p = meta_path(dept)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def save_meta(dept: str, years: list[int]) -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    meta_path(dept).write_text(json.dumps({"years": sorted(years)}))
+
+
+def reference_is_up_to_date(dept: str, years: list[int]) -> bool:
+    """Vrai si une référence existe déjà pour ce département ET couvre bien
+    exactement les années actuellement sélectionnées."""
+    if not (OUTPUT_DIR / f"reference_{dept}.csv").exists():
+        return False
+    meta = load_meta(dept)
+    if meta is None:
+        return False
+    return sorted(meta.get("years", [])) == sorted(years)
+
+
+def prepare_data_if_needed(dept: str, years: list[int], force: bool = False,
+                            progress_callback=None) -> bool:
+    """
+    Télécharge les données DVF et construit la référence de prix pour ce
+    département si nécessaire (absente, ou années différentes de la dernière
+    construction), sans intervention manuelle. Retourne True si une
+    (re)construction a eu lieu, False si les données étaient déjà à jour.
+    `progress_callback(message)` est appelé à chaque étape pour affichage
+    (ex. dans un st.status côté app), et est optionnel.
+    """
+    def notify(msg):
+        if progress_callback:
+            progress_callback(msg)
+
+    if not force and reference_is_up_to_date(dept, years):
+        return False
+
+    notify(f"Téléchargement des données DVF ({dept}, {', '.join(map(str, years))})...")
+    download(dept, years, force=force)
+
+    notify("Construction de la référence de prix/m²...")
+    run_reference(dept, years)
+    save_meta(dept, years)
+    return True
 
 
 def run_reference(dept: str, years: list[int]) -> None:

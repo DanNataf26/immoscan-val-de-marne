@@ -114,26 +114,33 @@ annees = st.sidebar.multiselect(
 st.sidebar.divider()
 st.sidebar.markdown("**Préparation des données**")
 
-if st.sidebar.button("1️⃣ Télécharger les données DVF", use_container_width=True):
-    with st.spinner("Téléchargement en cours..."):
-        core.download(dept, annees)
-    st.sidebar.success("Téléchargement terminé.")
-
-if st.sidebar.button("2️⃣ Construire la référence de prix", use_container_width=True):
-    with st.spinner("Calcul de la référence de prix/m²..."):
+if core.reference_is_up_to_date(dept, annees):
+    st.sidebar.success(f"✅ Référence à jour pour le {dept} ({', '.join(map(str, sorted(annees)))})")
+else:
+    with st.sidebar.status(f"Préparation automatique des données ({dept})...", expanded=True) as status_box:
         try:
-            core.run_reference(dept, annees)
+            core.prepare_data_if_needed(dept, annees, progress_callback=status_box.write)
             load_reference.clear()
-            st.sidebar.success("Référence construite.")
+            status_box.update(label="✅ Données prêtes", state="complete")
         except SystemExit as e:
+            status_box.update(label="Erreur lors de la préparation", state="error")
             st.sidebar.error(str(e))
 
-if reference_exists(dept):
-    st.sidebar.success(f"✅ Référence disponible pour le {dept}")
-else:
-    st.sidebar.warning(f"⚠️ Pas encore de référence pour le {dept}.")
+with st.sidebar.expander("Options avancées"):
+    if st.button("🔄 Forcer un nouveau téléchargement + recalcul", use_container_width=True):
+        with st.status(f"Retéléchargement forcé pour le {dept}...", expanded=True) as status_box:
+            try:
+                core.prepare_data_if_needed(dept, annees, force=True, progress_callback=status_box.write)
+                load_reference.clear()
+                status_box.update(label="✅ Données actualisées", state="complete")
+            except SystemExit as e:
+                status_box.update(label="Erreur", state="error")
+                st.error(str(e))
 
-st.sidebar.caption("Astuce : une adresse peut détecter automatiquement un autre département. Il faudra alors construire la référence de ce département.")
+st.sidebar.caption(
+    "Astuce : une adresse peut détecter automatiquement un autre département. "
+    "Sa référence sera alors préparée automatiquement à son tour."
+)
 
 st.title("ImmoScan — France entière")
 st.caption("Détection d'opportunités immobilières à partir des transactions réelles DVF, avec historique probable du bien et vues géographiques.")

@@ -40,11 +40,18 @@ mes_annonces_exemple.csv
 
 ## Utilisation recommandée
 
-1. Choisir le département dans la barre latérale.
-2. Télécharger les données DVF.
-3. Construire la référence de prix.
-4. Aller dans `Adresse + vues` pour analyser un bien.
-5. Aller dans `Potentiel caché` pour analyser la parcelle, le PLU et la réserve foncière.
+1. Choisir le département dans la barre latérale — les données DVF se
+   téléchargent et la référence de prix se construit **automatiquement** en
+   arrière-plan (plus besoin de cliquer sur des boutons "Télécharger" / "Construire").
+2. Aller dans `Adresse + vues` pour analyser un bien.
+3. Aller dans `Potentiel caché` pour analyser la parcelle, le PLU et la réserve foncière.
+
+La première préparation pour un département prend une à quelques minutes
+(téléchargement des fichiers DVF officiels). Elle ne se refait pas tant que
+le département et les années sélectionnées ne changent pas. Un bouton
+"🔄 Forcer un nouveau téléchargement + recalcul" reste disponible dans
+"Options avancées" de la barre latérale si vous voulez rafraîchir les
+données (ex. après une mise à jour DVF par la DGFiP).
 
 ## Module Potentiel caché (implémenté)
 
