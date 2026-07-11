@@ -234,10 +234,15 @@ with tab_address:
         c3.metric("Département", detected_dept)
         c4.metric("Score BAN", f"{geo.get('score', 0):.2f}" if geo.get("score") else "—")
 
-        radius_history = st.slider(
-            "Rayon pour l'historique probable et les comparables",
-            30, 500, 120, step=10, format="%d m",
-        )
+        col_radius, col_years = st.columns(2)
+        with col_radius:
+            radius_comparables = st.slider(
+                "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
+            )
+        with col_years:
+            since_years = st.slider(
+                "Comparables : dernières N années", 1, 15, 5, step=1,
+            )
 
         st.subheader("Vues du bien")
         render_geo_views(geo["latitude"], geo["longitude"])
@@ -256,33 +261,41 @@ with tab_address:
                 f"{detected_dept} afin d'obtenir l'historique DVF et les comparables."
             )
         else:
-            st.subheader("Historique probable des ventes du bien / de l'adresse")
+            st.subheader("Historique probable des ventes de ce bien précis")
             try:
                 history = core.find_property_history(
                     detected_dept, geo["label"], geo["latitude"], geo["longitude"],
-                    radius_m=radius_history,
                 )
                 if history.empty:
-                    st.caption("Aucune vente DVF trouvée à proximité immédiate.")
+                    st.caption(
+                        "Aucune vente DVF ne correspond à ce numéro et cette rue "
+                        "précisément (sur toutes les années chargées)."
+                    )
                 else:
                     st.dataframe(history, use_container_width=True)
                     st.caption(
-                        "Historique probable : la DVF publique ne garantit pas "
-                        "toujours l'identification exacte du logement, surtout "
-                        "en copropriété. Vérifiez les lignes proches et l'adresse DVF."
+                        "Filtré sur ce numéro + cette rue exactement, toutes années "
+                        "chargées confondues. En copropriété, plusieurs lots peuvent "
+                        "partager ce numéro — vérifiez la colonne 'correspondance' "
+                        "et l'adresse DVF affichée."
                     )
             except SystemExit as e:
                 st.warning(str(e))
 
-            st.subheader("Ventes comparables à proximité")
+            st.subheader(f"Ventes comparables à proximité (derniers {since_years} ans)")
             try:
                 comparables = core.find_comparables(
-                    detected_dept, geo["latitude"], geo["longitude"], radius_m=radius_history
+                    detected_dept, geo["latitude"], geo["longitude"],
+                    radius_m=radius_comparables, since_years=since_years,
                 )
                 if comparables.empty:
-                    st.caption("Aucune transaction DVF comparable dans ce rayon.")
+                    st.caption("Aucune transaction DVF comparable dans ce rayon/cette période.")
                 else:
                     st.dataframe(comparables, use_container_width=True)
+                    st.caption(
+                        "Toutes les ventes à proximité, quel que soit le numéro/la "
+                        "rue — pour comparer le prix au marché local récent."
+                    )
             except SystemExit as e:
                 st.warning(str(e))
 

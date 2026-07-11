@@ -399,13 +399,17 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 
 def find_comparables(dept: str, lat: float, lon: float, type_local: str | None = None,
-                      radius_m: float = 500, max_results: int = 15) -> pd.DataFrame:
+                      radius_m: float = 500, max_results: int = 15,
+                      since_years: int = 5) -> pd.DataFrame:
     """
     Cherche, dans le cache des transactions nettoyées, les ventes réelles les
-    plus proches d'un point GPS donné (utile pour situer un bien recherché
-    par adresse par rapport à de vraies ventes comparables toutes proches).
+    plus proches d'un point GPS donné, limitées aux `since_years` dernières
+    années (par défaut 5) — utile pour situer un bien recherché par adresse
+    par rapport à de vraies ventes comparables récentes et proches.
     Nécessite d'avoir lancé 'reference' au préalable pour ce département.
     """
+    from datetime import datetime
+
     cache_path = OUTPUT_DIR / f"transactions_nettoyees_{dept}.csv"
     if not cache_path.exists():
         raise SystemExit(f"Cache introuvable ({cache_path}). Lancez 'reference' d'abord.")
@@ -415,6 +419,15 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     if type_local:
         df = df[df["type_local"] == type_local]
 
+    if since_years and "date_mutation" in df.columns:
+        seuil = pd.Timestamp(datetime.now()) - pd.DateOffset(years=since_years)
+        dates = pd.to_datetime(df["date_mutation"], errors="coerce")
+        df = df[dates >= seuil]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
     df["distance_m"] = df.apply(
         lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
     )
@@ -427,57 +440,98 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
 
 
+def _parse_address_number_street(address: str) -> tuple[str, str]:
+    """Extrait (numéro, nom de voie) d'une adresse en texte libre. Gère le
+    format BAN standard sans virgule, ex. '38 avenue Sainte-Marie 94000
+    Créteil' -> ('38', 'avenue sainte marie'), en coupant avant le code
+    postal (5 chiffres) et tout ce qui suit."""
+    import re
+    txt = _normalize_text(address)
+    m = re.match(r"^(\d+\s*(?:bis|ter|quater)?)\s+(.*)$", txt)
+    if not m:
+        return "", txt
+    numero = re.sub(r"\s+", "", m.group(1))
+    rest = m.group(2)
+    # On coupe avant la première virgule éventuelle, ou avant un code postal
+    # à 5 chiffres (format BAN standard sans virgule), le premier des deux.
+    cut_positions = [len(rest)]
+    virgule = rest.find(",")
+    if virgule != -1:
+        cut_positions.append(virgule)
+    cp_match = re.search(r"\d{5}", rest)
+    if cp_match:
+        cut_positions.append(cp_match.start())
+    rest = rest[:min(cut_positions)].strip()
+    return numero, rest
+
+
 def find_property_history(dept: str, address: str, lat: float, lon: float,
-                          radius_m: float = 80, max_results: int = 30) -> pd.DataFrame:
+                          max_results: int = 30) -> pd.DataFrame:
     """
-    Récupère l'historique DVF probable d'un bien/adresse.
+    Récupère l'historique DVF du bien précis recherché (ce numéro, cette rue),
+    sur TOUTE la période chargée en cache (pas de limite de rayon ni d'années).
 
-    La DVF publique ne fournit pas toujours un identifiant stable de logement.
-    On combine donc deux signaux :
-      - ventes très proches géographiquement ;
-      - adresse DVF ressemblant à l'adresse saisie.
+    La DVF publique ne fournit pas d'identifiant stable de logement : on
+    identifie donc le bien par correspondance stricte numéro + rue (normalisés
+    pour tolérer les abréviations et accents). En copropriété, plusieurs lots
+    peuvent partager le même numéro — toutes les lignes correspondantes sont
+    alors montrées, à vérifier manuellement.
 
-    Le résultat doit être lu comme un historique probable à vérifier, surtout en
-    copropriété ou lorsqu'une rue contient plusieurs numéros/lotissements.
+    Si aucune correspondance exacte n'est trouvée, un repli de proximité très
+    étroit (30 m) est tenté et clairement signalé comme approximatif.
     """
     cache_path = OUTPUT_DIR / f"transactions_nettoyees_{dept}.csv"
     if not cache_path.exists():
         raise SystemExit(f"Cache introuvable ({cache_path}). Lancez 'reference' d'abord.")
 
     df = pd.read_csv(cache_path)
-    df = df.dropna(subset=["latitude", "longitude"]).copy()
     if df.empty:
         return pd.DataFrame()
 
-    df["distance_m"] = df.apply(
-        lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
-    )
-
-    target = _normalize_text(address)
     df["adresse_dvf"] = (
         df["adresse_numero"].fillna("").astype(str).str.replace(r"\.0$", "", regex=True)
         + " " + df["adresse_nom_voie"].fillna("").astype(str)
         + ", " + df["nom_commune"].fillna("").astype(str)
     )
-    df["adresse_norm"] = df["adresse_dvf"].map(_normalize_text)
+    df["numero_norm"] = (
+        df["adresse_numero"].fillna("").astype(str).str.replace(r"\.0$", "", regex=True).str.lower()
+    )
+    df["rue_norm"] = df["adresse_nom_voie"].map(_normalize_text)
 
-    # On garde les ventes proches. L'adresse textuelle sert à remonter les plus
-    # probables en haut, sans exclure les cas où DVF/BAN n'écrivent pas pareil.
-    proches = df[df["distance_m"] <= radius_m].copy()
-    if proches.empty:
+    target_numero, target_rue = _parse_address_number_street(address)
+    rue_tokens = [t for t in target_rue.split() if len(t) > 2]  # ignore "de", "la", etc.
+
+    def rue_correspond(rue_dvf: str) -> bool:
+        if not rue_tokens:
+            return False
+        hits = sum(1 for t in rue_tokens if t in rue_dvf)
+        return hits >= max(1, len(rue_tokens) - 1)  # tolère un mot manquant/abrégé
+
+    exact = df[
+        (df["numero_norm"] == target_numero) & (df["rue_norm"].apply(rue_correspond))
+    ].copy()
+    exact["correspondance"] = "Exacte (numéro + rue)"
+
+    result = exact
+    if result.empty and lat is not None and lon is not None:
+        # Repli très étroit, clairement signalé comme approximatif.
+        df2 = df.dropna(subset=["latitude", "longitude"]).copy()
+        if not df2.empty:
+            df2["distance_m"] = df2.apply(
+                lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
+            )
+            proche = df2[df2["distance_m"] <= 30].copy()
+            proche["correspondance"] = "Approximative (proximité < 30 m, adresse non confirmée)"
+            result = proche
+
+    if result.empty:
         return pd.DataFrame()
 
-    proches["adresse_similaire"] = proches["adresse_norm"].apply(
-        lambda x: x in target or target in x or any(part and part in x for part in target.split()[:4])
-    )
-    proches = proches.sort_values(["adresse_similaire", "distance_m", "date_mutation"],
-                                  ascending=[False, True, False])
-
+    result = result.sort_values("date_mutation", ascending=False)
     cols = ["date_mutation", "adresse_dvf", "nom_commune", "type_local",
             "valeur_fonciere", "surface_reelle_bati", "prix_m2",
-            "nb_lots", "distance_m", "adresse_similaire"]
-    out = proches[cols].head(max_results)
-    return out
+            "nb_lots", "correspondance"]
+    return result[cols].head(max_results)
 
 
 def google_maps_url(lat: float, lon: float) -> str:
