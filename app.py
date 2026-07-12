@@ -306,24 +306,16 @@ with tab_recherche:
             st.caption("Aucun DPE trouvé automatiquement pour cette adresse.")
         else:
             st.dataframe(dpe, use_container_width=True)
-            if suggested_surface is None:
-                # Repli sur la surface habitable du DPE si aucune vente exacte
-                # n'a été trouvée dans l'historique. Le nom du champ varie
-                # selon les versions du jeu de données ADEME — on essaie les
-                # candidats les plus courants.
-                for col in ("surface_habitable_logement", "surface_habitable",
-                            "surface_thermique_lot"):
-                    if col in dpe.columns:
-                        val = dpe.iloc[0].get(col)
-                        if pd.notna(val):
-                            suggested_surface = val
-                            break
-
-        if suggested_surface or suggested_type:
-            source = "l'historique de ce bien" if suggested_type else "le DPE de cette adresse"
             st.caption(
-                f"💡 Surface/type trouvés via {source} : repris automatiquement "
-                "ci-dessous (modifiable)."
+                "Le DPE n'alimente pas le pré-remplissage automatique (recherche "
+                "textuelle approximative, non validée aussi strictement que "
+                "l'historique DVF) — seule une correspondance exacte le fait."
+            )
+
+        if suggested_surface and suggested_type:
+            st.caption(
+                "💡 Surface et type trouvés via une vente exacte de ce bien : "
+                "repris automatiquement ci-dessous (modifiable)."
             )
 
         # Resynchronise les champs pré-remplissables (surface ici, et plus bas
