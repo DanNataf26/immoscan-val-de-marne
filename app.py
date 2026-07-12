@@ -169,34 +169,11 @@ with tab_recherche:
         if result:
             st.session_state["adresse_confirmee"] = result
     else:
-        st.warning(
-            "Le composant de suggestions automatiques n'a pas pu se charger — "
-            "recherche manuelle ci-dessous en repli."
+        st.error(
+            "Le composant de suggestions automatiques n'a pas pu se charger."
         )
         if CUSTOM_SEARCH_ERROR:
             st.caption(f"Détail technique : `{CUSTOM_SEARCH_ERROR}`")
-
-    with st.expander(
-        "🔎 Recherche manuelle (si les suggestions automatiques ne s'affichent pas)",
-        expanded=not CUSTOM_SEARCH_AVAILABLE,
-    ):
-        query = st.text_input(
-            "Adresse", placeholder="Ex : 12 rue de la Paix, Vincennes", key="adresse_query_input"
-        )
-        if st.button("🔎 Chercher des suggestions") and query:
-            with st.spinner("Recherche d'adresses..."):
-                st.session_state["adresse_suggestions"] = core.geocode_suggestions(query, limit=5)
-            if not st.session_state["adresse_suggestions"]:
-                st.warning("Aucune suggestion trouvée. Essayez une formulation plus simple.")
-
-        suggestions = st.session_state.get("adresse_suggestions", [])
-        if suggestions:
-            labels = [s["label"] for s in suggestions]
-            choice = st.radio("Suggestions", labels, key="adresse_suggestion_choice")
-            if st.button("✅ Utiliser cette adresse", type="primary"):
-                selected = next(s for s in suggestions if s["label"] == choice)
-                st.session_state["adresse_confirmee"] = selected
-                st.rerun()
 
     st.divider()
 
@@ -209,7 +186,7 @@ with tab_recherche:
             st.success(f"📍 Adresse active : {geo['label']}")
         with col_reset:
             if st.button("🔄 Nouvelle recherche"):
-                for k in ("adresse_confirmee", "adresse_suggestions"):
+                for k in ("adresse_confirmee",):
                     st.session_state.pop(k, None)
                 st.rerun()
 
