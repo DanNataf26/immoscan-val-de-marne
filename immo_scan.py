@@ -466,16 +466,19 @@ def _parse_address_number_street(address: str) -> tuple[str, str]:
 
 
 def find_property_history(dept: str, address: str, lat: float, lon: float,
-                          max_results: int = 30) -> pd.DataFrame:
+                          commune: str | None = None, max_results: int = 30) -> pd.DataFrame:
     """
-    Récupère l'historique DVF du bien précis recherché (ce numéro, cette rue),
-    sur TOUTE la période chargée en cache (pas de limite de rayon ni d'années).
+    Récupère l'historique DVF du bien précis recherché (ce numéro, cette rue,
+    cette commune), sur TOUTE la période chargée en cache (pas de limite de
+    rayon ni d'années).
 
     La DVF publique ne fournit pas d'identifiant stable de logement : on
-    identifie donc le bien par correspondance stricte numéro + rue (normalisés
-    pour tolérer les abréviations et accents). En copropriété, plusieurs lots
-    peuvent partager le même numéro — toutes les lignes correspondantes sont
-    alors montrées, à vérifier manuellement.
+    identifie donc le bien par correspondance stricte numéro + rue + commune
+    (normalisés pour tolérer les abréviations et accents). Le même nom de rue
+    peut exister dans plusieurs communes du département — la commune est
+    donc un critère obligatoire, pas seulement indicatif. En copropriété,
+    plusieurs lots peuvent partager le même numéro — toutes les lignes
+    correspondantes sont alors montrées, à vérifier manuellement.
 
     Si aucune correspondance exacte n'est trouvée, un repli de proximité très
     étroit (30 m) est tenté et clairement signalé comme approximatif.
@@ -497,6 +500,7 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
         df["adresse_numero"].fillna("").astype(str).str.replace(r"\.0$", "", regex=True).str.lower()
     )
     df["rue_norm"] = df["adresse_nom_voie"].map(_normalize_text)
+    df["commune_norm"] = df["nom_commune"].map(_normalize_text)
 
     # Mots de type de voie trop génériques pour servir de critère de
     # correspondance à eux seuls (sinon "avenue X" matche n'importe quelle
@@ -512,6 +516,7 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     rue_tokens = [
         t for t in target_rue.split() if len(t) > 2 and t not in MOTS_GENERIQUES
     ]
+    target_commune_norm = _normalize_text(commune) if commune else None
 
     def rue_correspond(rue_dvf: str) -> bool:
         if not rue_tokens:
@@ -521,10 +526,14 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
         # manquant peut désigner une rue complètement différente).
         return all(t in rue_dvf for t in rue_tokens)
 
-    exact = df[
-        (df["numero_norm"] == target_numero) & (df["rue_norm"].apply(rue_correspond))
-    ].copy()
-    exact["correspondance"] = "Exacte (numéro + rue)"
+    mask = (df["numero_norm"] == target_numero) & (df["rue_norm"].apply(rue_correspond))
+    if target_commune_norm:
+        # Une même rue peut exister dans plusieurs communes du département :
+        # la commune est un critère obligatoire dès qu'on la connaît.
+        mask &= df["commune_norm"] == target_commune_norm
+
+    exact = df[mask].copy()
+    exact["correspondance"] = "Exacte (numéro + rue + commune)"
 
     result = exact
     if result.empty and lat is not None and lon is not None:

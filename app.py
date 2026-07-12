@@ -265,6 +265,7 @@ with tab_address:
             try:
                 history = core.find_property_history(
                     detected_dept, geo["label"], geo["latitude"], geo["longitude"],
+                    commune=geo.get("commune"),
                 )
                 if history.empty:
                     st.caption(
