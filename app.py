@@ -145,23 +145,20 @@ st.sidebar.caption(
 st.title("ImmoScan — France entière")
 st.caption("Détection d'opportunités immobilières à partir des transactions réelles DVF, avec historique probable du bien et vues géographiques.")
 
-tab_address, tab_potentiel, tab_score, tab_batch, tab_explore = st.tabs([
-    "📍 Adresse + vues",
-    "🔍 Potentiel caché",
-    "🔎 Scorer un bien",
+tab_recherche, tab_batch, tab_explore = st.tabs([
+    "🔍 Rechercher un bien",
     "📋 Scorer plusieurs annonces",
     "📊 Explorer le marché",
 ])
 
 ref, trend = load_reference(dept) if reference_exists(dept) else (None, None)
 
-with tab_address:
+with tab_recherche:
     st.markdown(
-        "Tapez une adresse : les suggestions apparaissent automatiquement "
-        "en dessous pendant la frappe. Sélectionnez la bonne — elle sera "
-        "reprise automatiquement dans les onglets **Potentiel caché** et "
-        "**Scorer un bien** (modifiable séparément dans chacun sans "
-        "affecter les autres)."
+        "Tapez une adresse : les suggestions apparaissent automatiquement en "
+        "dessous pendant la frappe. Sélectionnez la bonne — toutes les "
+        "informations disponibles s'affichent ensuite à la suite sur cette "
+        "même page."
     )
 
     if SEARCHBOX_AVAILABLE:
@@ -178,11 +175,6 @@ with tab_address:
 
         if selected:
             st.session_state["adresse_confirmee"] = selected
-            # Compatibilité avec les clés lues par les autres onglets
-            st.session_state["adresse_commune_detectee"] = selected["commune"]
-            st.session_state["adresse_dept_detecte"] = selected.get("departement") or dept
-            st.session_state["adresse_lat"] = selected["latitude"]
-            st.session_state["adresse_lon"] = selected["longitude"]
     else:
         st.warning(
             "Le module d'autocomplétion (`streamlit-searchbox`) n'est pas "
@@ -206,10 +198,6 @@ with tab_address:
             if st.button("✅ Utiliser cette adresse", type="primary"):
                 selected = next(s for s in suggestions if s["label"] == choice)
                 st.session_state["adresse_confirmee"] = selected
-                st.session_state["adresse_commune_detectee"] = selected["commune"]
-                st.session_state["adresse_dept_detecte"] = selected.get("departement") or dept
-                st.session_state["adresse_lat"] = selected["latitude"]
-                st.session_state["adresse_lon"] = selected["longitude"]
                 st.rerun()
 
     st.divider()
@@ -234,16 +222,6 @@ with tab_address:
         c3.metric("Département", detected_dept)
         c4.metric("Score BAN", f"{geo.get('score', 0):.2f}" if geo.get("score") else "—")
 
-        col_radius, col_years = st.columns(2)
-        with col_radius:
-            radius_comparables = st.slider(
-                "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
-            )
-        with col_years:
-            since_years = st.slider(
-                "Comparables : dernières N années", 1, 15, 5, step=1,
-            )
-
         st.subheader("Vues du bien")
         render_geo_views(geo["latitude"], geo["longitude"])
 
@@ -251,20 +229,33 @@ with tab_address:
             st.warning(
                 f"Cette adresse semble être dans le département {detected_dept}, "
                 f"alors que la barre latérale est sur {dept}. Sélectionnez "
-                f"{detected_dept} dans la barre latérale puis téléchargez/"
-                "construisez sa référence si nécessaire."
+                f"{detected_dept} dans la barre latérale pour que sa référence "
+                "se prépare automatiquement."
             )
 
-        if not reference_exists(detected_dept):
+        active_dept = detected_dept if reference_exists(detected_dept) else dept
+        active_ref, _ = load_reference(active_dept) if reference_exists(active_dept) else (None, None)
+
+        # --- Historique probable + comparables ---------------------------------
+        if active_ref is None:
             st.info(
-                f"Construisez la référence de prix pour le département "
-                f"{detected_dept} afin d'obtenir l'historique DVF et les comparables."
+                f"La référence de prix pour le département {active_dept} n'est "
+                "pas encore prête (voir la barre latérale) : historique DVF et "
+                "comparables indisponibles pour l'instant."
             )
         else:
+            col_radius, col_years = st.columns(2)
+            with col_radius:
+                radius_comparables = st.slider(
+                    "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
+                )
+            with col_years:
+                since_years = st.slider("Comparables : dernières N années", 1, 15, 5, step=1)
+
             st.subheader("Historique probable des ventes de ce bien précis")
             try:
                 history = core.find_property_history(
-                    detected_dept, geo["label"], geo["latitude"], geo["longitude"],
+                    active_dept, geo["label"], geo["latitude"], geo["longitude"],
                     commune=geo.get("commune"),
                 )
                 if history.empty:
@@ -275,10 +266,11 @@ with tab_address:
                 else:
                     st.dataframe(history, use_container_width=True)
                     st.caption(
-                        "Filtré sur ce numéro + cette rue exactement, toutes années "
-                        "chargées confondues. En copropriété, plusieurs lots peuvent "
-                        "partager ce numéro — vérifiez la colonne 'correspondance' "
-                        "et l'adresse DVF affichée."
+                        "Filtré sur ce numéro + cette rue + cette commune "
+                        "exactement, toutes années chargées confondues. En "
+                        "copropriété, plusieurs lots peuvent partager ce numéro "
+                        "— vérifiez la colonne 'correspondance' et l'adresse "
+                        "DVF affichée."
                     )
             except SystemExit as e:
                 st.warning(str(e))
@@ -286,7 +278,7 @@ with tab_address:
             st.subheader(f"Ventes comparables à proximité (derniers {since_years} ans)")
             try:
                 comparables = core.find_comparables(
-                    detected_dept, geo["latitude"], geo["longitude"],
+                    active_dept, geo["latitude"], geo["longitude"],
                     radius_m=radius_comparables, since_years=since_years,
                 )
                 if comparables.empty:
@@ -300,6 +292,7 @@ with tab_address:
             except SystemExit as e:
                 st.warning(str(e))
 
+        # --- DPE -----------------------------------------------------------
         st.subheader("DPE enregistré à cette adresse")
         with st.spinner("Recherche DPE ADEME..."):
             dpe = core.find_dpe(geo["label"], geo.get("code_postal"))
@@ -308,58 +301,11 @@ with tab_address:
         else:
             st.dataframe(dpe, use_container_width=True)
 
-with tab_potentiel:
-    st.markdown(
-        "Adresse à analyser pour le foncier — reprise automatiquement de la "
-        "recherche de l'onglet **📍 Adresse + vues**, mais modifiable ici "
-        "sans impacter les autres onglets."
-    )
+        st.divider()
 
-    global_addr = st.session_state.get("adresse_confirmee")
-
-    if "potentiel_adresse_input" not in st.session_state:
-        st.session_state["potentiel_adresse_input"] = global_addr["label"] if global_addr else ""
-    if "potentiel_lat" not in st.session_state and global_addr:
-        st.session_state["potentiel_lat"] = global_addr["latitude"]
-        st.session_state["potentiel_lon"] = global_addr["longitude"]
-
-    col_addr, col_sync = st.columns([4, 1])
-    with col_sync:
-        st.write("")
-        st.write("")
-        resync_clicked = st.button(
-            "🔄 Reprendre", key="potentiel_resync", disabled=global_addr is None,
-            help="Reprendre l'adresse de l'onglet Adresse + vues",
-        )
-
-    if resync_clicked:
-        st.session_state["potentiel_adresse_input"] = global_addr["label"]
-        st.session_state["potentiel_lat"] = global_addr["latitude"]
-        st.session_state["potentiel_lon"] = global_addr["longitude"]
-
-    with col_addr:
-        st.text_input("Adresse à analyser", key="potentiel_adresse_input")
-
-    if st.button("Localiser cette adresse", key="potentiel_localiser"):
-        with st.spinner("Géocodage..."):
-            geo_p = core.geocode_address(st.session_state["potentiel_adresse_input"])
-        if geo_p is None:
-            st.error("Adresse non reconnue par l'API Adresse.")
-        else:
-            st.session_state["potentiel_lat"] = geo_p["latitude"]
-            st.session_state["potentiel_lon"] = geo_p["longitude"]
-            st.success(f"📍 {geo_p['label']}")
-
-    lat = st.session_state.get("potentiel_lat")
-    lon = st.session_state.get("potentiel_lon")
-
-    if lat is None or lon is None:
-        st.info(
-            "Recherchez une adresse dans l'onglet '📍 Adresse + vues', ou "
-            "tapez-en une ici puis cliquez 'Localiser cette adresse'."
-        )
-    else:
-        st.caption(f"Point analysé : {lat:.5f}, {lon:.5f}")
+        # --- Potentiel caché : cadastre, PLU, Géorisques --------------------
+        st.subheader("🔍 Potentiel caché")
+        lat, lon = geo["latitude"], geo["longitude"]
 
         st.markdown("**Vérification manuelle complémentaire**")
         lc1, lc2, lc3, lc4 = st.columns(4)
@@ -377,12 +323,11 @@ with tab_potentiel:
             "nécessite une clé payante au-delà de 100 crédits gratuits. Le lien "
             "ouvre sa carte interactive pour une vérification manuelle gratuite."
         )
-        st.divider()
 
         surface_connue = st.number_input(
             "Surface bâtie connue du bien (m²), si vous la connaissez — "
             "sert uniquement à estimer la réserve foncière ci-dessous",
-            min_value=0.0, value=0.0, step=5.0,
+            min_value=0.0, value=0.0, step=5.0, key="potentiel_surface",
         )
 
         if st.button("Analyser le foncier", type="primary"):
@@ -393,7 +338,7 @@ with tab_potentiel:
             with st.spinner("Risques naturels et technologiques (Géorisques)..."):
                 georisques = core.get_georisques(lat, lon)
 
-            st.subheader("Parcelle cadastrale")
+            st.markdown("**Parcelle cadastrale**")
             if parcelle is None:
                 st.caption(
                     "Parcelle non trouvée automatiquement. Cela peut arriver si "
@@ -401,13 +346,13 @@ with tab_potentiel:
                     "est temporairement indisponible."
                 )
             else:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
-                c2.metric("Section / numéro",
-                          f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
-                c3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
+                pc1, pc2, pc3 = st.columns(3)
+                pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
+                pc2.metric("Section / numéro",
+                           f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
+                pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
 
-            st.subheader("Zone PLU")
+            st.markdown("**Zone PLU**")
             if not zones_plu:
                 st.caption(
                     "Aucune zone PLU trouvée automatiquement à ce point (commune "
@@ -417,7 +362,7 @@ with tab_potentiel:
             else:
                 st.dataframe(pd.DataFrame(zones_plu), use_container_width=True)
 
-            st.subheader("Risques naturels et technologiques (Géorisques)")
+            st.markdown("**Risques naturels et technologiques (Géorisques)**")
             if georisques is None:
                 st.caption(
                     "Résultat indisponible automatiquement. Vérifiez manuellement "
@@ -426,17 +371,17 @@ with tab_potentiel:
             else:
                 st.json(georisques, expanded=False)
 
-            st.subheader("Estimation indicative du potentiel caché")
+            st.markdown("**Estimation indicative du potentiel caché**")
             potentiel = core.estimate_hidden_potential(
                 parcelle, zones_plu, surface_bati_existante=surface_connue or None
             )
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Contenance parcelle",
-                      f"{potentiel['contenance_parcelle_m2'] or '—'} m²")
-            c2.metric("Emprise au sol estimée",
-                      f"{potentiel['emprise_au_sol_estimee_pct'] or '—'}%")
-            c3.metric("Réserve foncière théorique",
-                      f"{potentiel['reserve_fonciere_theorique_m2'] or '—'} m²")
+            ec1, ec2, ec3 = st.columns(3)
+            ec1.metric("Contenance parcelle",
+                       f"{potentiel['contenance_parcelle_m2'] or '—'} m²")
+            ec2.metric("Emprise au sol estimée",
+                       f"{potentiel['emprise_au_sol_estimee_pct'] or '—'}%")
+            ec3.metric("Réserve foncière théorique",
+                       f"{potentiel['reserve_fonciere_theorique_m2'] or '—'} m²")
             st.info(potentiel["commentaire"])
             st.caption(
                 "⚠️ Estimation grossière, à but indicatif uniquement. Ne remplace "
@@ -445,55 +390,55 @@ with tab_potentiel:
                 "certificat d'urbanisme officiel demandé en mairie."
             )
 
-with tab_score:
-    detected_dept = st.session_state.get("adresse_dept_detecte", dept)
-    active_dept = detected_dept if reference_exists(detected_dept) else dept
-    active_ref, _ = load_reference(active_dept) if reference_exists(active_dept) else (None, None)
+        st.divider()
 
-    if active_ref is None:
-        st.info("Construisez d'abord la référence de prix via la barre latérale.")
-    else:
-        st.caption(f"Référence utilisée : département {active_dept}")
-        communes_dispo = sorted(active_ref["nom_commune"].unique())
-        types_dispo = sorted(active_ref["type_local"].unique())
-        detected = st.session_state.get("adresse_commune_detectee")
+        # --- Score vs marché -------------------------------------------------
+        st.subheader("🔎 Scorer ce bien vs le marché")
+        if active_ref is None:
+            st.info(
+                f"La référence de prix pour le département {active_dept} n'est "
+                "pas encore prête (voir la barre latérale)."
+            )
+        else:
+            communes_dispo = sorted(active_ref["nom_commune"].unique())
+            types_dispo = sorted(active_ref["type_local"].unique())
+            detected_commune = geo.get("commune")
 
-        if "score_commune" not in st.session_state and detected in communes_dispo:
-            st.session_state["score_commune"] = detected
+            # Si l'adresse recherchée a changé, on resynchronise la commune de
+            # scoring par défaut (tout en restant modifiable ensuite).
+            if st.session_state.get("score_last_geo_label") != geo["label"]:
+                st.session_state["score_last_geo_label"] = geo["label"]
+                if detected_commune in communes_dispo:
+                    st.session_state["score_commune"] = detected_commune
 
-        col1, col2 = st.columns(2)
-        with col1:
-            sub1, sub2 = st.columns([3, 1])
-            with sub2:
-                st.write("")
-                st.write("")
-                resync_commune_clicked = st.button(
-                    "🔄", key="score_resync_commune", disabled=detected not in communes_dispo,
-                    help="Reprendre la commune détectée dans l'onglet Adresse + vues",
-                )
-            if resync_commune_clicked:
-                st.session_state["score_commune"] = detected
-            with sub1:
-                commune = st.selectbox("Commune", communes_dispo, key="score_commune")
-            type_local = st.selectbox("Type de bien", types_dispo, key="score_type")
-        with col2:
-            surface = st.number_input("Surface (m²)", min_value=1.0, value=90.0, step=1.0, key="score_surface")
-            prix = st.number_input("Prix affiché (€)", min_value=1000.0, value=450_000.0, step=1000.0, key="score_prix")
+            if "score_commune" not in st.session_state:
+                st.session_state["score_commune"] = communes_dispo[0]
 
-        if st.button("Analyser ce bien", type="primary"):
-            result = core.score_property(commune, type_local, surface, prix, dept=active_dept)
-            if "erreur" in result:
-                st.error(result["erreur"])
-            else:
-                ecart = result["ecart_pct"]
-                color = "🟢" if ecart <= -15 else "🟡" if ecart < 5 else "🟠" if ecart < 15 else "🔴"
-                st.subheader(f"{color} {result['diagnostic']}")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Prix/m² annonce", f"{result['prix_m2_annonce']:,} €")
-                c2.metric(f"Référence {commune}", f"{result['prix_m2_reference_commune']:,} €")
-                c3.metric("Écart au marché", f"{ecart:+.1f} %")
-                c4.metric("Transactions", result["nb_transactions_reference"])
-                st.caption("Ce score compare uniquement le prix au m². Il ne remplace pas l'analyse travaux, DPE, urbanisme et liquidité.")
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                commune_score = st.selectbox("Commune", communes_dispo, key="score_commune")
+                type_local = st.selectbox("Type de bien", types_dispo, key="score_type")
+            with sc2:
+                surface = st.number_input("Surface (m²)", min_value=1.0, value=90.0, step=1.0, key="score_surface")
+                prix = st.number_input("Prix affiché (€)", min_value=1000.0, value=450_000.0, step=1000.0, key="score_prix")
+
+            if st.button("Analyser ce bien", type="primary", key="score_button"):
+                result = core.score_property(commune_score, type_local, surface, prix, dept=active_dept)
+                if "erreur" in result:
+                    st.error(result["erreur"])
+                else:
+                    ecart = result["ecart_pct"]
+                    color = "🟢" if ecart <= -15 else "🟡" if ecart < 5 else "🟠" if ecart < 15 else "🔴"
+                    st.markdown(f"**{color} {result['diagnostic']}**")
+                    rc1, rc2, rc3, rc4 = st.columns(4)
+                    rc1.metric("Prix/m² annonce", f"{result['prix_m2_annonce']:,} €")
+                    rc2.metric(f"Référence {commune_score}", f"{result['prix_m2_reference_commune']:,} €")
+                    rc3.metric("Écart au marché", f"{ecart:+.1f} %")
+                    rc4.metric("Transactions", result["nb_transactions_reference"])
+                    st.caption(
+                        "Ce score compare uniquement le prix au m². Il ne "
+                        "remplace pas l'analyse travaux, DPE, urbanisme et liquidité."
+                    )
 
 with tab_batch:
     if ref is None:

@@ -43,8 +43,9 @@ mes_annonces_exemple.csv
 1. Choisir le département dans la barre latérale — les données DVF se
    téléchargent et la référence de prix se construit **automatiquement** en
    arrière-plan (plus besoin de cliquer sur des boutons "Télécharger" / "Construire").
-2. Aller dans `Adresse + vues` pour analyser un bien.
-3. Aller dans `Potentiel caché` pour analyser la parcelle, le PLU et la réserve foncière.
+2. Aller dans `🔍 Rechercher un bien` : tapez une adresse, et toutes les
+   informations disponibles (historique, comparables, DPE, potentiel caché,
+   score vs marché) s'affichent à la suite sur la même page.
 
 La première préparation pour un département prend une à quelques minutes
 (téléchargement des fichiers DVF officiels). Elle ne se refait pas tant que
@@ -53,10 +54,26 @@ le département et les années sélectionnées ne changent pas. Un bouton
 "Options avancées" de la barre latérale si vous voulez rafraîchir les
 données (ex. après une mise à jour DVF par la DGFiP).
 
+## Structure de l'application
+
+Trois onglets, organisés par type d'usage :
+
+- **🔍 Rechercher un bien** : le flux principal. Une seule recherche
+  d'adresse, puis tout s'affiche à la suite — vues géographiques, historique
+  probable, comparables, DPE, potentiel caché (cadastre/PLU/Géorisques), et
+  score vs marché. La commune du score se resynchronise automatiquement à
+  chaque nouvelle recherche d'adresse, tout en restant modifiable manuellement
+  entre-temps.
+- **📋 Scorer plusieurs annonces** : import d'un CSV pour scorer un lot
+  d'annonces d'un coup (usage différent : plusieurs biens, pas une recherche
+  d'adresse précise).
+- **📊 Explorer le marché** : parcourir les prix de référence par commune,
+  sans adresse précise.
+
 ## Module Potentiel caché (implémenté)
 
-Onglet dédié, actif une fois qu'une adresse a été recherchée dans l'onglet
-`Adresse + vues`. Il combine :
+Section de l'onglet `🔍 Rechercher un bien`, active une fois qu'une adresse a
+été recherchée. Elle combine :
 
 - **Liens de vérification manuelle** vers Cadastre, Géoportail de l'Urbanisme,
   Géorisques et Pappers Immo (carte interactive gratuite).
