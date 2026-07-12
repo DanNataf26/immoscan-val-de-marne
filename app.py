@@ -74,11 +74,28 @@ def reference_exists(dept: str) -> bool:
     return (core.OUTPUT_DIR / f"reference_{dept}.csv").exists()
 
 
-def render_geo_views(lat: float, lon: float):
+def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
     t1, t2, t3 = st.tabs(["🗺️ Carte géolocalisation", "🌍 Vue Google Earth", "🚶 Vue Google Street"])
 
     with t1:
-        st.map(pd.DataFrame([{"lat": lat, "lon": lon}]), latitude="lat", longitude="lon", zoom=15)
+        try:
+            import folium
+            m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
+            folium.Marker(
+                [lat, lon], tooltip="Adresse recherchée",
+                icon=folium.Icon(color="red", icon="home", prefix="fa"),
+            ).add_to(m)
+            if radius_m:
+                folium.Circle(
+                    [lat, lon], radius=radius_m, color="#dc2626", weight=2,
+                    fill=True, fill_opacity=0.10,
+                    tooltip=f"Rayon comparables : {int(radius_m)} m",
+                ).add_to(m)
+            components.html(m._repr_html_(), height=440)
+            if radius_m:
+                st.caption(f"Le cercle rouge représente le rayon de {int(radius_m)} m utilisé pour les comparables.")
+        except Exception as exc:
+            st.warning(f"Carte indisponible ({exc}) — utilisez le lien Google Maps ci-dessous.")
         st.link_button("Ouvrir dans Google Maps", core.google_maps_url(lat, lon), use_container_width=True)
 
     with t2:
@@ -107,17 +124,34 @@ default_index = list(DEPARTEMENTS_FRANCE.values()).index("94")
 dept_label = st.sidebar.selectbox("Département de travail", list(DEPARTEMENTS_FRANCE.keys()), index=default_index)
 dept = DEPARTEMENTS_FRANCE[dept_label]
 
-annees = st.sidebar.multiselect(
-    "Années DVF à utiliser",
-    ANNEES_DISPONIBLES,
-    default=ANNEES_DISPONIBLES,
-    help="Pour toute la France, travaillez département par département pour éviter des téléchargements très lourds.",
-)
+with st.sidebar.expander("Options avancées"):
+    annees = st.multiselect(
+        "Années DVF à utiliser",
+        ANNEES_DISPONIBLES,
+        default=ANNEES_DISPONIBLES,
+        help=(
+            "Détermine les données disponibles pour TOUT le reste de l'app : "
+            "l'historique du bien les utilise toutes, et le curseur 'dernières "
+            "N années' des comparables ne peut pas dépasser ce qui est chargé "
+            "ici. Pour toute la France, travaillez département par département "
+            "pour éviter des téléchargements très lourds."
+        ),
+    )
+    force_refresh = st.button("🔄 Forcer un nouveau téléchargement + recalcul", use_container_width=True)
 
 st.sidebar.divider()
 st.sidebar.markdown("**Préparation des données**")
 
-if core.reference_is_up_to_date(dept, annees):
+if force_refresh:
+    with st.sidebar.status(f"Retéléchargement forcé pour le {dept}...", expanded=True) as status_box:
+        try:
+            core.prepare_data_if_needed(dept, annees, force=True, progress_callback=status_box.write)
+            load_reference.clear()
+            status_box.update(label="✅ Données actualisées", state="complete")
+        except SystemExit as e:
+            status_box.update(label="Erreur", state="error")
+            st.sidebar.error(str(e))
+elif core.reference_is_up_to_date(dept, annees):
     st.sidebar.success(f"✅ Référence à jour pour le {dept} ({', '.join(map(str, sorted(annees)))})")
 else:
     with st.sidebar.status(f"Préparation automatique des données ({dept})...", expanded=True) as status_box:
@@ -128,17 +162,6 @@ else:
         except SystemExit as e:
             status_box.update(label="Erreur lors de la préparation", state="error")
             st.sidebar.error(str(e))
-
-with st.sidebar.expander("Options avancées"):
-    if st.button("🔄 Forcer un nouveau téléchargement + recalcul", use_container_width=True):
-        with st.status(f"Retéléchargement forcé pour le {dept}...", expanded=True) as status_box:
-            try:
-                core.prepare_data_if_needed(dept, annees, force=True, progress_callback=status_box.write)
-                load_reference.clear()
-                status_box.update(label="✅ Données actualisées", state="complete")
-            except SystemExit as e:
-                status_box.update(label="Erreur", state="error")
-                st.error(str(e))
 
 st.sidebar.caption(
     "Astuce : une adresse peut détecter automatiquement un autre département. "
@@ -197,8 +220,16 @@ with tab_recherche:
         c3.metric("Département", detected_dept)
         c4.metric("Score BAN", f"{geo.get('score', 0):.2f}" if geo.get("score") else "—")
 
+        col_radius, col_years = st.columns(2)
+        with col_radius:
+            radius_comparables = st.slider(
+                "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
+            )
+        with col_years:
+            since_years = st.slider("Comparables : dernières N années", 1, 15, 5, step=1)
+
         st.subheader("Vues du bien")
-        render_geo_views(geo["latitude"], geo["longitude"])
+        render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_comparables)
 
         if detected_dept != dept:
             st.warning(
@@ -222,14 +253,6 @@ with tab_recherche:
                 "comparables indisponibles pour l'instant."
             )
         else:
-            col_radius, col_years = st.columns(2)
-            with col_radius:
-                radius_comparables = st.slider(
-                    "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
-                )
-            with col_years:
-                since_years = st.slider("Comparables : dernières N années", 1, 15, 5, step=1)
-
             st.subheader("Historique probable des ventes de ce bien précis")
             try:
                 history = core.find_property_history(
