@@ -623,7 +623,10 @@ def get_parcelle_cadastrale(lat: float, lon: float) -> dict | None:
     Essaie d'abord une géométrie ponctuelle (Point) ; si aucune parcelle
     n'intersecte exactement ce point (cas fréquent en bordure de parcelle,
     précision de géocodage), retente avec un petit polygone tampon (~5 m)
-    autour du point.
+    autour du point. Si ce tampon touche plusieurs parcelles adjacentes
+    (ex. maison + jardin sur des parcelles séparées), leurs contenances sont
+    additionnées plutôt que de ne garder arbitrairement que la première —
+    sinon le chiffre affiché ne représenterait qu'un fragment du terrain.
     """
     import requests, json
 
@@ -646,14 +649,18 @@ def get_parcelle_cadastrale(lat: float, lon: float) -> dict | None:
             features = _query({"type": "Polygon", "coordinates": [square]})
         if not features:
             return None
-        props = features[0]["properties"]
+
+        props0 = features[0]["properties"]
+        contenances = [f["properties"].get("contenance") for f in features
+                       if f["properties"].get("contenance")]
         return {
-            "id_parcelle": props.get("id"),
-            "code_insee": props.get("commune"),
-            "prefixe": props.get("prefixe"),
-            "section": props.get("section"),
-            "numero": props.get("numero"),
-            "contenance_m2": props.get("contenance"),
+            "id_parcelle": props0.get("id"),
+            "code_insee": props0.get("commune"),
+            "prefixe": props0.get("prefixe"),
+            "section": props0.get("section"),
+            "numero": props0.get("numero"),
+            "contenance_m2": sum(contenances) if contenances else None,
+            "nb_parcelles": len(features),
         }
     except Exception as exc:
         print(f"[warn] Cadastre échoué pour ({lat}, {lon}) : {exc}")
@@ -767,6 +774,104 @@ def estimate_hidden_potential(parcelle: dict | None, zones_plu: list[dict] | Non
         result["commentaire"] = "Données insuffisantes pour estimer un potentiel."
 
     return result
+
+
+def find_nearby_transport(lat: float, lon: float, radius_m: int = 1500,
+                           max_results: int = 5) -> list[dict] | None:
+    """
+    Cherche les gares, stations de métro/RER/tramway les plus proches d'un
+    point, via l'API Overpass (OpenStreetMap) — gratuite, sans clé, couvre
+    toute la France. Retourne une liste triée par distance croissante, ou
+    None si la requête échoue.
+
+    NB : OpenStreetMap est une base collaborative ; la couverture est très
+    bonne en Île-de-France mais peut être incomplète ailleurs. À vérifier
+    manuellement en cas de doute (absence suspecte d'une gare connue).
+    """
+    import requests
+
+    query = f"""
+    [out:json][timeout:12];
+    (
+      node["railway"="station"](around:{radius_m},{lat},{lon});
+      node["railway"="halt"](around:{radius_m},{lat},{lon});
+      node["public_transport"="station"](around:{radius_m},{lat},{lon});
+    );
+    out body;
+    """
+    try:
+        resp = requests.post(
+            "https://overpass-api.de/api/interpreter", data={"data": query}, timeout=15
+        )
+        resp.raise_for_status()
+        elements = resp.json().get("elements", [])
+        results = []
+        seen_names = set()
+        for el in elements:
+            name = el.get("tags", {}).get("name")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            dist = haversine_m(lat, lon, el["lat"], el["lon"])
+            results.append({
+                "nom": name,
+                "type": el.get("tags", {}).get("railway")
+                        or el.get("tags", {}).get("public_transport") or "station",
+                "distance_m": round(dist),
+            })
+        results.sort(key=lambda r: r["distance_m"])
+        return results[:max_results]
+    except Exception as exc:
+        print(f"[warn] Recherche transports échouée pour ({lat}, {lon}) : {exc}")
+        return None
+
+
+def interpret_dpe_classe(dpe: pd.DataFrame | None) -> dict | None:
+    """
+    Extrait la classe énergie (et GES si disponible) du premier résultat DPE,
+    avec une note qualitative — PAS un ajustement chiffré du prix (les
+    données DVF ne permettent pas de calibrer un coefficient fiable, mieux
+    vaut rester sur un signal qualitatif que d'inventer une précision qu'on
+    n'a pas). Les noms de champs de l'API ADEME évoluent parfois — plusieurs
+    candidats sont essayés.
+    """
+    if dpe is None or dpe.empty:
+        return None
+
+    candidats_energie = ["etiquette_dpe", "classe_consommation_energie", "etiquette_dpe_final"]
+    candidats_ges = ["etiquette_ges", "classe_estimation_ges", "etiquette_ges_final"]
+
+    classe_energie = None
+    for col in candidats_energie:
+        if col in dpe.columns:
+            val = dpe.iloc[0].get(col)
+            if pd.notna(val):
+                classe_energie = str(val).upper().strip()
+                break
+
+    classe_ges = None
+    for col in candidats_ges:
+        if col in dpe.columns:
+            val = dpe.iloc[0].get(col)
+            if pd.notna(val):
+                classe_ges = str(val).upper().strip()
+                break
+
+    if classe_energie is None:
+        return None
+
+    if classe_energie in ("A", "B", "C"):
+        note = "Bon DPE — se négocie souvent avec une légère prime sur le marché."
+    elif classe_energie == "D":
+        note = "DPE moyen — généralement neutre sur le prix."
+    else:
+        note = (
+            "DPE peu performant (passoire thermique si F/G) — se négocie "
+            "souvent avec une décote, et des travaux de rénovation "
+            "énergétique sont probablement à anticiper dans le budget."
+        )
+
+    return {"classe_energie": classe_energie, "classe_ges": classe_ges, "note": note}
 
 
 # ----------------------------------------------------------------------------

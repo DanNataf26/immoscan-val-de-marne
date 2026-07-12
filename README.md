@@ -60,37 +60,55 @@ Trois onglets, organisés par type d'usage :
 
 - **🔍 Rechercher un bien** : le flux principal. Une seule recherche
   d'adresse, puis tout s'affiche à la suite — vues géographiques, historique
-  probable, comparables, DPE, potentiel caché (cadastre/PLU/Géorisques), et
-  score vs marché. La commune du score se resynchronise automatiquement à
-  chaque nouvelle recherche d'adresse, tout en restant modifiable manuellement
-  entre-temps.
+  probable, comparables, DPE, puis une section unique **"Analyser ce bien"**
+  qui combine score vs marché et potentiel caché (une seule saisie de
+  surface/prix, un seul bouton). La commune/type/surface se resynchronisent
+  automatiquement à chaque nouvelle recherche d'adresse, tout en restant
+  modifiables manuellement entre-temps.
 - **📋 Scorer plusieurs annonces** : import d'un CSV pour scorer un lot
   d'annonces d'un coup (usage différent : plusieurs biens, pas une recherche
   d'adresse précise).
 - **📊 Explorer le marché** : parcourir les prix de référence par commune,
   sans adresse précise.
 
-## Module Potentiel caché (implémenté)
+## Section "Analyser ce bien" (score marché + potentiel caché fusionnés)
 
-Section de l'onglet `🔍 Rechercher un bien`, active une fois qu'une adresse a
-été recherchée. Elle combine :
+Une seule saisie (surface + prix optionnel) alimente les deux analyses,
+affichées l'une après l'autre au clic sur "Analyser ce bien" :
 
+**Score vs marché** (nécessite un prix) :
+- Écart % par rapport au prix médian/m² de la commune
+- **Note DPE qualitative** : si un DPE a été trouvé pour l'adresse, une note
+  contextuelle s'affiche (bon DPE → prime probable ; DPE F/G → décote et
+  travaux probables) — volontairement qualitatif, pas un ajustement chiffré
+  du prix (les données DVF ne permettent pas de calibrer un coefficient fiable).
+
+**Potentiel caché** (nécessite juste la surface) :
 - **Liens de vérification manuelle** vers Cadastre, Géoportail de l'Urbanisme,
   Géorisques et Pappers Immo (carte interactive gratuite).
 - **Cadastre automatique** (API Carto IGN) : parcelle, section, numéro,
-  contenance (surface officielle du terrain).
+  contenance (surface officielle du terrain — additionnée si plusieurs
+  parcelles adjacentes sont détectées, ex. maison + jardin sur des parcelles
+  séparées).
 - **Zone PLU automatique** (API Carto IGN — module GPU) : libellé de zone
   (ex. 'UD', 'UC'), destination dominante.
+- **Transports en commun à proximité** (OpenStreetMap/Overpass API) : gares,
+  stations de métro/RER/tramway les plus proches avec distance — gratuit,
+  sans clé, couverture très bonne en Île-de-France.
 - **Risques automatiques** (API Géorisques) : rapport de risques naturels et
   technologiques au point recherché.
 - **Estimation indicative de réserve foncière** : compare la contenance de la
-  parcelle à la surface bâtie que vous renseignez, pour donner un ordre de
-  grandeur de réserve foncière théorique — à but de priorisation uniquement.
+  parcelle à la surface bâtie renseignée, pour donner un ordre de grandeur de
+  réserve foncière théorique — à but de priorisation uniquement.
 
 **Pappers Immo n'est pas intégré automatiquement** : son API nécessite une clé
 payante au-delà de 100 crédits gratuits (elle est très complète : DVF,
 cadastre, DPE, permis de construire — voir immobilier.pappers.fr). Le lien
 proposé permet une vérification manuelle gratuite sans clé.
+
+**Piste non retenue pour l'instant** : les permis de construire récents à
+proximité (signal de dynamisme d'un quartier) nécessiteraient l'API Sitadel
+(data.gouv.fr) ou Pappers Immo — à explorer plus tard si utile.
 
 ## Limites importantes
 

@@ -295,22 +295,61 @@ with tab_recherche:
                 "repris automatiquement ci-dessous (modifiable)."
             )
 
-        # Resynchronise les champs pré-remplissables (surface ici, et plus bas
-        # commune/type/surface du scoring) à chaque nouvelle adresse recherchée,
-        # sans jamais écraser une modification déjà faite pour cette adresse.
-        if st.session_state.get("prefill_last_geo_label") != geo["label"]:
-            st.session_state["prefill_last_geo_label"] = geo["label"]
+        st.divider()
+
+        # --- Analyser ce bien : score marché + potentiel caché ensemble ------
+        st.subheader("🔍 Analyser ce bien")
+
+        detected_commune = geo.get("commune")
+        lat, lon = geo["latitude"], geo["longitude"]
+
+        if active_ref is not None:
+            communes_dispo = sorted(active_ref["nom_commune"].unique())
+            types_dispo = sorted(active_ref["type_local"].unique())
+        else:
+            communes_dispo, types_dispo = [], []
+
+        # Resynchronise commune/type/surface à chaque nouvelle adresse
+        # recherchée, sans jamais écraser une modification déjà faite pour
+        # cette même adresse.
+        if st.session_state.get("score_last_geo_label") != geo["label"]:
+            st.session_state["score_last_geo_label"] = geo["label"]
+            if detected_commune in communes_dispo:
+                st.session_state["score_commune"] = detected_commune
+            if suggested_type in types_dispo:
+                st.session_state["score_type"] = suggested_type
             if suggested_surface:
                 try:
-                    st.session_state["potentiel_surface"] = float(suggested_surface)
+                    st.session_state["score_surface"] = float(suggested_surface)
                 except (TypeError, ValueError):
                     pass
 
-        st.divider()
+        if communes_dispo and "score_commune" not in st.session_state:
+            st.session_state["score_commune"] = communes_dispo[0]
 
-        # --- Potentiel caché : cadastre, PLU, Géorisques --------------------
-        st.subheader("🔍 Potentiel caché")
-        lat, lon = geo["latitude"], geo["longitude"]
+        commune_score = type_local = None
+        if communes_dispo:
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                commune_score = st.selectbox("Commune", communes_dispo, key="score_commune")
+                type_local = st.selectbox("Type de bien", types_dispo, key="score_type")
+            with sc2:
+                surface = st.number_input(
+                    "Surface (m²)", min_value=0.0, step=1.0, key="score_surface",
+                    help="Utilisée à la fois pour le score marché et l'estimation du potentiel caché.",
+                )
+                prix = st.number_input(
+                    "Prix affiché (€) — laisser à 0 si inconnu", min_value=0.0, step=1000.0,
+                    key="score_prix",
+                )
+        else:
+            st.info(
+                f"La référence de prix pour le département {active_dept} n'est "
+                "pas encore prête (voir la barre latérale) — le score marché "
+                "sera indisponible, mais le potentiel caché reste utilisable."
+            )
+            surface = st.number_input("Surface (m²)", min_value=0.0, step=1.0, key="score_surface")
+            prix = 0.0
 
         st.markdown("**Vérification manuelle complémentaire**")
         lc1, lc2, lc3, lc4 = st.columns(4)
@@ -329,130 +368,135 @@ with tab_recherche:
             "ouvre sa carte interactive pour une vérification manuelle gratuite."
         )
 
-        surface_connue = st.number_input(
-            "Surface bâtie connue du bien (m²), si vous la connaissez — "
-            "sert uniquement à estimer la réserve foncière ci-dessous",
-            min_value=0.0, step=5.0, key="potentiel_surface",
-        )
-
-        if st.button("Analyser le foncier", type="primary"):
-            with st.spinner("Cadastre (API Carto IGN)..."):
-                parcelle = core.get_parcelle_cadastrale(lat, lon)
-            with st.spinner("Zone PLU (API Carto IGN — GPU)..."):
-                zones_plu = core.get_zone_plu(lat, lon)
-            with st.spinner("Risques naturels et technologiques (Géorisques)..."):
-                georisques = core.get_georisques(lat, lon)
-
-            st.markdown("**Parcelle cadastrale**")
-            if parcelle is None:
-                st.caption(
-                    "Parcelle non trouvée automatiquement. Cela peut arriver si "
-                    "le point tombe juste en dehors d'une parcelle ou si l'API "
-                    "est temporairement indisponible."
-                )
+        if st.button("Analyser ce bien", type="primary", key="score_button"):
+            if not surface:
+                st.warning("Renseignez au moins la surface pour lancer l'analyse.")
             else:
-                pc1, pc2, pc3 = st.columns(3)
-                pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
-                pc2.metric("Section / numéro",
-                           f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
-                pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
-
-            st.markdown("**Zone PLU**")
-            if not zones_plu:
-                st.caption(
-                    "Aucune zone PLU trouvée automatiquement à ce point (commune "
-                    "au RNU, document non encore publié sur le Géoportail de "
-                    "l'Urbanisme, ou point hors zonage)."
-                )
-            else:
-                st.dataframe(pd.DataFrame(zones_plu), use_container_width=True)
-
-            st.markdown("**Risques naturels et technologiques (Géorisques)**")
-            if georisques is None:
-                st.caption(
-                    "Résultat indisponible automatiquement. Vérifiez manuellement "
-                    "sur georisques.gouv.fr en cas de doute avant tout projet."
-                )
-            else:
-                st.json(georisques, expanded=False)
-
-            st.markdown("**Estimation indicative du potentiel caché**")
-            potentiel = core.estimate_hidden_potential(
-                parcelle, zones_plu, surface_bati_existante=surface_connue or None
-            )
-            ec1, ec2, ec3 = st.columns(3)
-            ec1.metric("Contenance parcelle",
-                       f"{potentiel['contenance_parcelle_m2'] or '—'} m²")
-            ec2.metric("Emprise au sol estimée",
-                       f"{potentiel['emprise_au_sol_estimee_pct'] or '—'}%")
-            ec3.metric("Réserve foncière théorique",
-                       f"{potentiel['reserve_fonciere_theorique_m2'] or '—'} m²")
-            st.info(potentiel["commentaire"])
-            st.caption(
-                "⚠️ Estimation grossière, à but indicatif uniquement. Ne remplace "
-                "ni la lecture du règlement de zone PLU complet (hauteur, emprise "
-                "au sol maximale, reculs, coefficient de biotope...) ni un "
-                "certificat d'urbanisme officiel demandé en mairie."
-            )
-
-        st.divider()
-
-        # --- Score vs marché -------------------------------------------------
-        st.subheader("🔎 Scorer ce bien vs le marché")
-        if active_ref is None:
-            st.info(
-                f"La référence de prix pour le département {active_dept} n'est "
-                "pas encore prête (voir la barre latérale)."
-            )
-        else:
-            communes_dispo = sorted(active_ref["nom_commune"].unique())
-            types_dispo = sorted(active_ref["type_local"].unique())
-            detected_commune = geo.get("commune")
-
-            # Si l'adresse recherchée a changé, on resynchronise la commune, la
-            # surface et le type de bien par défaut (tout en restant modifiable
-            # ensuite, et sans jamais écraser un choix déjà fait pour cette
-            # même adresse).
-            if st.session_state.get("score_last_geo_label") != geo["label"]:
-                st.session_state["score_last_geo_label"] = geo["label"]
-                if detected_commune in communes_dispo:
-                    st.session_state["score_commune"] = detected_commune
-                if suggested_type in types_dispo:
-                    st.session_state["score_type"] = suggested_type
-                if suggested_surface:
-                    try:
-                        st.session_state["score_surface"] = float(suggested_surface)
-                    except (TypeError, ValueError):
-                        pass
-
-            if "score_commune" not in st.session_state:
-                st.session_state["score_commune"] = communes_dispo[0]
-
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                commune_score = st.selectbox("Commune", communes_dispo, key="score_commune")
-                type_local = st.selectbox("Type de bien", types_dispo, key="score_type")
-            with sc2:
-                surface = st.number_input("Surface (m²)", min_value=1.0, value=90.0, step=1.0, key="score_surface")
-                prix = st.number_input("Prix affiché (€)", min_value=1000.0, value=450_000.0, step=1000.0, key="score_prix")
-
-            if st.button("Analyser ce bien", type="primary", key="score_button"):
-                result = core.score_property(commune_score, type_local, surface, prix, dept=active_dept)
-                if "erreur" in result:
-                    st.error(result["erreur"])
-                else:
-                    ecart = result["ecart_pct"]
-                    color = "🟢" if ecart <= -15 else "🟡" if ecart < 5 else "🟠" if ecart < 15 else "🔴"
-                    st.markdown(f"**{color} {result['diagnostic']}**")
-                    rc1, rc2, rc3, rc4 = st.columns(4)
-                    rc1.metric("Prix/m² annonce", f"{result['prix_m2_annonce']:,} €")
-                    rc2.metric(f"Référence {commune_score}", f"{result['prix_m2_reference_commune']:,} €")
-                    rc3.metric("Écart au marché", f"{ecart:+.1f} %")
-                    rc4.metric("Transactions", result["nb_transactions_reference"])
+                # --- Score marché (si commune dispo et prix renseigné) -----
+                st.markdown("#### 📊 Score vs marché")
+                if not commune_score:
+                    st.caption("Référence de prix indisponible pour ce département.")
+                elif not prix:
                     st.caption(
-                        "Ce score compare uniquement le prix au m². Il ne "
-                        "remplace pas l'analyse travaux, DPE, urbanisme et liquidité."
+                        "ℹ️ Prix non renseigné : score marché non calculé "
+                        "(le potentiel caché ci-dessous reste disponible)."
                     )
+                else:
+                    result = core.score_property(commune_score, type_local, surface, prix, dept=active_dept)
+                    if "erreur" in result:
+                        st.error(result["erreur"])
+                    else:
+                        ecart = result["ecart_pct"]
+                        color = "🟢" if ecart <= -15 else "🟡" if ecart < 5 else "🟠" if ecart < 15 else "🔴"
+                        st.markdown(f"**{color} {result['diagnostic']}**")
+                        rc1, rc2, rc3, rc4 = st.columns(4)
+                        rc1.metric("Prix/m² annonce", f"{result['prix_m2_annonce']:,} €")
+                        rc2.metric(f"Référence {commune_score}", f"{result['prix_m2_reference_commune']:,} €")
+                        rc3.metric("Écart au marché", f"{ecart:+.1f} %")
+                        rc4.metric("Transactions", result["nb_transactions_reference"])
+                        st.caption(
+                            "Ce score compare uniquement le prix au m². Il ne "
+                            "remplace pas l'analyse travaux, urbanisme et liquidité."
+                        )
+                        dpe_info = core.interpret_dpe_classe(dpe)
+                        if dpe_info:
+                            classe_str = dpe_info["classe_energie"]
+                            if dpe_info["classe_ges"]:
+                                classe_str += f" / GES {dpe_info['classe_ges']}"
+                            st.caption(f"💡 DPE {classe_str} — {dpe_info['note']}")
+
+                st.divider()
+
+                # --- Potentiel caché : cadastre, PLU, Géorisques, transports -
+                st.markdown("#### 🏗️ Potentiel caché")
+                with st.spinner("Cadastre (API Carto IGN)..."):
+                    parcelle = core.get_parcelle_cadastrale(lat, lon)
+                with st.spinner("Zone PLU (API Carto IGN — GPU)..."):
+                    zones_plu = core.get_zone_plu(lat, lon)
+                with st.spinner("Risques naturels et technologiques (Géorisques)..."):
+                    georisques = core.get_georisques(lat, lon)
+                with st.spinner("Transports à proximité (OpenStreetMap)..."):
+                    transports = core.find_nearby_transport(lat, lon)
+
+                st.markdown("**Parcelle cadastrale**")
+                if parcelle is None:
+                    st.caption(
+                        "Parcelle non trouvée automatiquement. Cela peut arriver si "
+                        "le point tombe juste en dehors d'une parcelle ou si l'API "
+                        "est temporairement indisponible."
+                    )
+                else:
+                    pc1, pc2, pc3 = st.columns(3)
+                    pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
+                    pc2.metric("Section / numéro",
+                               f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
+                    pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
+                    nb = parcelle.get("nb_parcelles") or 1
+                    if nb > 1:
+                        st.caption(
+                            f"ℹ️ {nb} parcelles cadastrales adjacentes trouvées à ce "
+                            "point — contenance totale additionnée. Vérifiez via le "
+                            "lien Cadastre ci-dessus si ce découpage correspond bien "
+                            "à ce que vous attendiez."
+                        )
+                    else:
+                        st.caption(
+                            "Rappel : la contenance est la surface du **terrain** "
+                            "(cadastre), pas la surface habitable — une maison "
+                            "étroite sur plusieurs étages peut avoir une contenance "
+                            "bien plus petite que sa surface habitable totale."
+                        )
+
+                st.markdown("**Zone PLU**")
+                if not zones_plu:
+                    st.caption(
+                        "Aucune zone PLU trouvée automatiquement à ce point (commune "
+                        "au RNU, document non encore publié sur le Géoportail de "
+                        "l'Urbanisme, ou point hors zonage)."
+                    )
+                else:
+                    st.dataframe(pd.DataFrame(zones_plu), use_container_width=True)
+
+                st.markdown("**Transports en commun à proximité**")
+                if not transports:
+                    st.caption(
+                        "Aucune gare/station trouvée automatiquement dans un rayon "
+                        "de 1,5 km, ou service temporairement indisponible."
+                    )
+                else:
+                    st.dataframe(pd.DataFrame(transports), use_container_width=True)
+                    st.caption(
+                        "Source : OpenStreetMap (base collaborative) — couverture "
+                        "très bonne en Île-de-France, à vérifier ailleurs en cas de doute."
+                    )
+
+                st.markdown("**Risques naturels et technologiques (Géorisques)**")
+                if georisques is None:
+                    st.caption(
+                        "Résultat indisponible automatiquement. Vérifiez manuellement "
+                        "sur georisques.gouv.fr en cas de doute avant tout projet."
+                    )
+                else:
+                    st.json(georisques, expanded=False)
+
+                st.markdown("**Estimation indicative de réserve foncière**")
+                potentiel = core.estimate_hidden_potential(
+                    parcelle, zones_plu, surface_bati_existante=surface or None
+                )
+                ec1, ec2, ec3 = st.columns(3)
+                ec1.metric("Contenance parcelle",
+                           f"{potentiel['contenance_parcelle_m2'] or '—'} m²")
+                ec2.metric("Emprise au sol estimée",
+                           f"{potentiel['emprise_au_sol_estimee_pct'] or '—'}%")
+                ec3.metric("Réserve foncière théorique",
+                           f"{potentiel['reserve_fonciere_theorique_m2'] or '—'} m²")
+                st.info(potentiel["commentaire"])
+                st.caption(
+                    "⚠️ Estimation grossière, à but indicatif uniquement. Ne remplace "
+                    "ni la lecture du règlement de zone PLU complet (hauteur, emprise "
+                    "au sol maximale, reculs, coefficient de biotope...) ni un "
+                    "certificat d'urbanisme officiel demandé en mairie."
+                )
 
 with tab_batch:
     if ref is None:
