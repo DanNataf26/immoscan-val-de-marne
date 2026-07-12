@@ -16,10 +16,10 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 try:
-    from streamlit_searchbox import st_searchbox
-    SEARCHBOX_AVAILABLE = True
-except ImportError:
-    SEARCHBOX_AVAILABLE = False
+    from st_address_search import address_search_component
+    CUSTOM_SEARCH_AVAILABLE = True
+except Exception:
+    CUSTOM_SEARCH_AVAILABLE = False
 
 sys.path.insert(0, str(Path(__file__).parent))
 import immo_scan as core  # noqa: E402
@@ -161,28 +161,20 @@ with tab_recherche:
         "même page."
     )
 
-    if SEARCHBOX_AVAILABLE:
-        def _search_adresses(searchterm: str):
-            suggestions = core.geocode_suggestions(searchterm, limit=6)
-            return [(s["label"], s) for s in suggestions]
-
-        selected = st_searchbox(
-            _search_adresses,
-            placeholder="Ex : 12 rue de la Paix, Vincennes",
-            key="adresse_searchbox",
-            clear_on_submit=False,
-            debounce=400,
-        )
-
-        if selected:
-            st.session_state["adresse_confirmee"] = selected
+    if CUSTOM_SEARCH_AVAILABLE:
+        result = address_search_component(key="adresse_component")
+        if result:
+            st.session_state["adresse_confirmee"] = result
     else:
         st.warning(
-            "Le module d'autocomplétion (`streamlit-searchbox`) n'est pas "
-            "installé — recherche manuelle en repli. Ajoutez "
-            "`streamlit-searchbox` à requirements.txt et redéployez pour "
-            "activer les suggestions automatiques."
+            "Le composant de suggestions automatiques n'a pas pu se charger — "
+            "recherche manuelle ci-dessous en repli."
         )
+
+    with st.expander(
+        "🔎 Recherche manuelle (si les suggestions automatiques ne s'affichent pas)",
+        expanded=not CUSTOM_SEARCH_AVAILABLE,
+    ):
         query = st.text_input(
             "Adresse", placeholder="Ex : 12 rue de la Paix, Vincennes", key="adresse_query_input"
         )
@@ -212,7 +204,7 @@ with tab_recherche:
             st.success(f"📍 Adresse active : {geo['label']}")
         with col_reset:
             if st.button("🔄 Nouvelle recherche"):
-                for k in ("adresse_confirmee", "adresse_suggestions", "adresse_searchbox"):
+                for k in ("adresse_confirmee", "adresse_suggestions"):
                     st.session_state.pop(k, None)
                 st.rerun()
 

@@ -94,6 +94,25 @@ proposé permet une vérification manuelle gratuite sans clé.
 
 ## Limites importantes
 
+**Suggestions automatiques pendant la frappe : composant maison (`st_address_search/`).**
+`streamlit-searchbox` provoquait un plantage systématique (`Segmentation
+fault`) sur Streamlit Community Cloud, avant même le démarrage du serveur —
+testé avec plusieurs versions de Streamlit (1.38.0 et 1.47.1), sans succès.
+À la place, l'app utilise un composant Streamlit fait maison, en HTML/JS pur
+(pas de dépendance tierce, pas de build JavaScript) : le navigateur appelle
+directement l'API Adresse du gouvernement pendant la frappe, et renvoie
+l'adresse choisie à Python via le protocole natif des composants Streamlit
+(`window.postMessage`). Voir `st_address_search/index.html`.
+
+**Point de vigilance non vérifié en conditions réelles** : ce composant
+suppose que l'API Adresse (`api-adresse.data.gouv.fr`) autorise les appels
+directs depuis un navigateur (CORS). Cela n'a pas pu être confirmé dans
+l'environnement de développement (pas d'accès réseau navigateur). Si les
+suggestions ne s'affichent jamais et qu'un message d'erreur apparaît sous le
+champ de recherche, c'est probablement la cause — utilisez alors la
+recherche manuelle repliée juste en dessous, qui fonctionne indépendamment
+(elle passe par le serveur Python, pas par le navigateur).
+
 L'estimation de réserve foncière est indicative et grossière. Elle ne
 remplace ni la lecture du règlement de zone PLU complet (hauteur autorisée,
 emprise au sol maximale, reculs, coefficient de biotope...), ni un certificat
