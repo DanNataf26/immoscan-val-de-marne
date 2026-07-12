@@ -171,6 +171,7 @@ with tab_recherche:
             placeholder="Ex : 12 rue de la Paix, Vincennes",
             key="adresse_searchbox",
             clear_on_submit=False,
+            debounce=400,
         )
 
         if selected:
