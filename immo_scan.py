@@ -532,12 +532,73 @@ def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
     )
 
 
+def test_cerema_api_live(code_insee: str) -> dict:
+    """
+    Teste en direct l'API DVF+ open-data du Cerema (module Python
+    `apifoncier`, flux "ouvert" — documentation officielle indique qu'aucun
+    jeton n'est requis pour ce flux, contrairement à DV3F/Fichiers fonciers).
+
+    Isolée dans sa propre fonction avec import différé et capture large des
+    exceptions : un souci ici (paquet absent, API indisponible, changement de
+    schéma...) ne doit jamais faire planter le reste de l'application.
+    Retourne un dict avec 'succes' (bool), 'message', et 'apercu' (DataFrame
+    ou None) pour affichage direct dans l'app.
+    """
+    try:
+        import apifoncier.dvf_opendata as dvf
+    except ImportError as exc:
+        return {
+            "succes": False,
+            "message": f"Module 'apifoncier' non installé ou indisponible : {exc}",
+            "apercu": None,
+        }
+
+    try:
+        df = dvf.mutations(code_insee=code_insee)
+        if df is None or df.empty:
+            return {
+                "succes": False,
+                "message": (
+                    f"Appel réussi mais aucune donnée retournée pour la "
+                    f"commune {code_insee} (l'API a répondu sans erreur, "
+                    "mais avec un résultat vide)."
+                ),
+                "apercu": None,
+            }
+        return {
+            "succes": True,
+            "message": f"✅ {len(df)} mutations récupérées en direct pour la commune {code_insee}, sans jeton ni fichier à télécharger.",
+            "apercu": df.head(10),
+        }
+    except Exception as exc:
+        return {
+            "succes": False,
+            "message": f"Échec de l'appel à l'API Cerema : {type(exc).__name__}: {exc}",
+            "apercu": None,
+        }
+
+
+CEREMA_BUNDLED_DIR = Path(__file__).parent / "cerema_data"
+
+
 def load_cerema_cache(dept: str) -> pd.DataFrame | None:
-    """Charge le cache Cerema DVF+ pour un département, si déjà importé."""
+    """
+    Charge les données Cerema DVF+ pour un département. Cherche d'abord un
+    fichier intégré au dépôt (dossier `cerema_data/`, committé une fois pour
+    toutes sur GitHub — survit aux redéploiements et reboots), puis, à
+    défaut, le cache généré par un import manuel via l'upload dans l'app
+    (perdu à chaque redéploiement, car stocké dans le dossier de travail
+    éphémère `output/`).
+    """
+    bundled_path = CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv"
+    if bundled_path.exists():
+        return pd.read_csv(bundled_path)
+
     cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
-    if not cache_path.exists():
-        return None
-    return pd.read_csv(cache_path)
+    if cache_path.exists():
+        return pd.read_csv(cache_path)
+
+    return None
 
 
 def find_comparables(dept: str, lat: float, lon: float, type_local: str | None = None,

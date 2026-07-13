@@ -194,30 +194,81 @@ with st.sidebar.expander("Options avancées"):
 
     st.divider()
     st.markdown("**Historique complémentaire 2014-2020 (Cerema DVF+)**")
+
+    bundled_exists = (core.CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv").exists()
+    uploaded_exists = (core.OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv").exists()
+
+    if bundled_exists:
+        st.success(
+            f"✅ Historique Cerema DVF+ intégré en permanence au dépôt pour le "
+            f"{dept} (fichier `cerema_data/cerema_dvfplus_{dept}.csv`) — "
+            "survit aux redémarrages, pas besoin de le réimporter."
+        )
+    else:
+        st.caption(
+            "Source : Cerema, DVF+ open-data (Licence Ouverte v2.0, Etalab) — "
+            "https://datafoncier.cerema.fr/donnees/autres-donnees-foncieres/dvfplus-open-data. "
+            "Téléchargement manuel requis (fichiers distribués en archives ZIP, "
+            "pas d'URL directe automatisable) : rendez-vous sur "
+            "cerema.app.box.com/v/dvfplus-opendata, téléchargez l'archive de "
+            "votre région, puis déposez-la ci-dessous."
+        )
+        st.info(
+            "💡 **Astuce pour éviter de réimporter à chaque redéploiement** : "
+            "une fois importé ci-dessous, téléchargez le fichier généré "
+            f"(`output/cerema_dvfplus_{dept}.csv`) et déposez-le directement "
+            f"dans un dossier `cerema_data/` de votre dépôt GitHub — l'app le "
+            "détectera alors automatiquement de façon permanente, sans "
+            "jamais avoir besoin de le réimporter."
+        )
+        cerema_zip = st.file_uploader(
+            "Archive ZIP Cerema DVF+", type=["zip"], key="cerema_zip_upload",
+            help="Les archives régionales (plusieurs départements) peuvent peser "
+                 "plusieurs centaines de Mo — la limite d'upload est fixée à 1 Go "
+                 "(voir .streamlit/config.toml).",
+        )
+        if cerema_zip is not None:
+            if st.button("Importer pour ce département", key="cerema_import_button"):
+                with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
+                    tmp_path = core.OUTPUT_DIR / f"_tmp_cerema_{dept}.zip"
+                    core.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                    tmp_path.write_bytes(cerema_zip.getvalue())
+                    try:
+                        msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                        st.success(msg)
+                    except SystemExit as e:
+                        st.error(str(e))
+                    finally:
+                        tmp_path.unlink(missing_ok=True)
+        if uploaded_exists:
+            st.caption(
+                f"✅ Historique Cerema DVF+ importé pour le {dept} pour cette "
+                "session (sera perdu au prochain redémarrage de l'app — voir "
+                "l'astuce ci-dessus pour le rendre permanent)."
+            )
+
+    st.divider()
+    st.markdown("**🧪 Test expérimental : API Cerema en direct (sans fichier)**")
     st.caption(
-        "Source : Cerema, DVF+ open-data (Licence Ouverte v2.0, Etalab) — "
-        "https://datafoncier.cerema.fr/donnees/autres-donnees-foncieres/dvfplus-open-data. "
-        "Téléchargement manuel requis (fichiers distribués en archives ZIP, "
-        "pas d'URL directe automatisable) : rendez-vous sur "
-        "cerema.app.box.com/v/dvfplus-opendata, téléchargez l'archive de "
-        "votre région, puis déposez-la ci-dessous."
+        "Teste si l'API ouverte DVF+ du Cerema (module `apifoncier`) peut "
+        "remplacer le circuit fichier ZIP ci-dessus — automatique, sans "
+        "jeton d'après la documentation officielle, mais API en "
+        "préproduction (bêta). Isolé : un échec ici n'affecte rien d'autre "
+        "dans l'app."
     )
-    cerema_zip = st.file_uploader("Archive ZIP Cerema DVF+", type=["zip"], key="cerema_zip_upload")
-    if cerema_zip is not None:
-        if st.button("Importer pour ce département", key="cerema_import_button"):
-            with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
-                tmp_path = core.OUTPUT_DIR / f"_tmp_cerema_{dept}.zip"
-                core.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                tmp_path.write_bytes(cerema_zip.getvalue())
-                try:
-                    msg = core.import_cerema_dvfplus(str(tmp_path), dept)
-                    st.success(msg)
-                except SystemExit as e:
-                    st.error(str(e))
-                finally:
-                    tmp_path.unlink(missing_ok=True)
-    if (core.OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv").exists():
-        st.caption(f"✅ Historique Cerema DVF+ déjà importé pour le {dept}.")
+    code_insee_test = st.text_input(
+        "Code INSEE de la commune à tester", value="94021",
+        help="94021 = Chennevières-sur-Marne, à titre d'exemple.",
+        key="cerema_api_test_insee",
+    )
+    if st.button("Tester l'appel en direct", key="cerema_api_test_button"):
+        with st.spinner("Appel à l'API Cerema en cours..."):
+            resultat = core.test_cerema_api_live(code_insee_test)
+        if resultat["succes"]:
+            st.success(resultat["message"])
+            st.dataframe(resultat["apercu"], use_container_width=True)
+        else:
+            st.warning(resultat["message"])
 
 st.sidebar.divider()
 st.sidebar.markdown("**Préparation des données**")
