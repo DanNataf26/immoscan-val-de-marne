@@ -183,7 +183,7 @@ with st.sidebar.expander("Options avancées"):
             "bien les utilise toutes, et le curseur 'dernières N années' des "
             "comparables ne peut pas dépasser cette plage. Pour toute la France, "
             "travaillez département par département pour éviter des "
-            "téléchargements très lourds.",
+            "téléchargements très lourds."
         ),
     )
     annees = list(range(annee_min, annee_max + 1))
