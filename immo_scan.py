@@ -613,22 +613,22 @@ def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5)
 # évoluent de temps en temps. Chaque fonction échoue silencieusement (retourne
 # None) plutôt que de faire planter l'app en cas de changement de schéma.
 
-def get_parcelle_cadastrale(lat: float, lon: float) -> dict | None:
+def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dict | None:
     """
-    Récupère la parcelle cadastrale au point donné (API Carto IGN, module
-    cadastre — gratuit, sans clé). Retourne notamment la contenance (surface
-    officielle de la parcelle en m²), utile pour estimer un foncier sous-
-    exploité par rapport à la surface bâtie existante.
+    Récupère les parcelles cadastrales à proximité immédiate du point donné
+    (API Carto IGN, module cadastre — gratuit, sans clé).
 
-    Essaie d'abord une géométrie ponctuelle (Point) ; si aucune parcelle
-    n'intersecte exactement ce point (cas fréquent en bordure de parcelle,
-    précision de géocodage), retente avec un petit polygone tampon (~5 m)
-    autour du point. Si ce tampon touche plusieurs parcelles adjacentes
-    (ex. maison + jardin sur des parcelles séparées), leurs contenances sont
-    additionnées plutôt que de ne garder arbitrairement que la première —
-    sinon le chiffre affiché ne représenterait qu'un fragment du terrain.
+    IMPORTANT : on interroge toujours un petit périmètre (par défaut 10 m)
+    plutôt qu'un point exact. Un point d'adresse (API BAN) est souvent placé
+    sur la voie d'accès plutôt qu'à l'intérieur de la parcelle bâtie réelle —
+    une requête ponctuelle peut alors renvoyer avec confiance la mauvaise
+    parcelle (ex. celle de la rue elle-même) sans jamais déclencher de repli,
+    puisqu'elle obtient bien UN résultat, juste le mauvais. On retourne donc
+    toutes les parcelles touchées par ce petit périmètre, pour que l'app
+    puisse les présenter comme candidates à vérifier plutôt que d'en choisir
+    une seule silencieusement.
     """
-    import requests, json
+    import requests, json, math
 
     def _query(geom_dict):
         resp = requests.get(IGN_CADASTRE_URL, params={"geom": json.dumps(geom_dict)}, timeout=10)
@@ -636,31 +636,43 @@ def get_parcelle_cadastrale(lat: float, lon: float) -> dict | None:
         return resp.json().get("features", [])
 
     try:
-        features = _query({"type": "Point", "coordinates": [lon, lat]})
-        if not features:
-            # Repli : petit carré tampon (~5 m) autour du point, au cas où le
-            # point tombe pile sur une frontière de parcelle ou légèrement à
-            # côté (précision de géocodage).
-            d = 0.00005  # environ 5 m en latitude/longitude
-            square = [
-                [lon - d, lat - d], [lon + d, lat - d],
-                [lon + d, lat + d], [lon - d, lat + d], [lon - d, lat - d],
-            ]
-            features = _query({"type": "Polygon", "coordinates": [square]})
+        d_lat = buffer_m / 111_320
+        d_lon = buffer_m / (111_320 * max(math.cos(math.radians(lat)), 0.1))
+        square = [
+            [lon - d_lon, lat - d_lat], [lon + d_lon, lat - d_lat],
+            [lon + d_lon, lat + d_lat], [lon - d_lon, lat + d_lat], [lon - d_lon, lat - d_lat],
+        ]
+        features = _query({"type": "Polygon", "coordinates": [square]})
         if not features:
             return None
 
-        props0 = features[0]["properties"]
-        contenances = [f["properties"].get("contenance") for f in features
-                       if f["properties"].get("contenance")]
+        # Dédoublonnage par numéro de parcelle (l'API peut renvoyer des
+        # doublons géométriques pour une même parcelle sur un petit périmètre).
+        vues = {}
+        for f in features:
+            p = f["properties"]
+            key = (p.get("section"), p.get("numero"))
+            if key not in vues:
+                vues[key] = {
+                    "id_parcelle": p.get("id"),
+                    "code_insee": p.get("commune"),
+                    "prefixe": p.get("prefixe"),
+                    "section": p.get("section"),
+                    "numero": p.get("numero"),
+                    "contenance_m2": p.get("contenance"),
+                }
+        parcelles = list(vues.values())
+        contenances = [p["contenance_m2"] for p in parcelles if p["contenance_m2"]]
+
+        # Champs "principaux" = la première parcelle, pour compatibilité avec
+        # le reste du code qui affiche un seul jeu de valeurs — mais la liste
+        # complète est aussi exposée pour que l'app puisse toutes les montrer.
+        principal = parcelles[0]
         return {
-            "id_parcelle": props0.get("id"),
-            "code_insee": props0.get("commune"),
-            "prefixe": props0.get("prefixe"),
-            "section": props0.get("section"),
-            "numero": props0.get("numero"),
+            **principal,
             "contenance_m2": sum(contenances) if contenances else None,
-            "nb_parcelles": len(features),
+            "nb_parcelles": len(parcelles),
+            "parcelles": parcelles,
         }
     except Exception as exc:
         print(f"[warn] Cadastre échoué pour ({lat}, {lon}) : {exc}")

@@ -113,36 +113,18 @@ def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
         st.link_button("Ouvrir dans Google Maps", core.google_maps_url(lat, lon), use_container_width=True)
 
     with t2:
-        try:
-            import folium
-            mc = folium.Map(location=[lat, lon], zoom_start=19, tiles=None)
-            folium.TileLayer(
-                tiles=(
-                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
-                    "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM"
-                    "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg"
-                ),
-                attr="IGN-F/Géoportail", name="Photos aériennes", overlay=False,
-            ).add_to(mc)
-            folium.TileLayer(
-                tiles=(
-                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
-                    "&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI vecteur"
-                    "&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png"
-                ),
-                attr="IGN-F/Géoportail — Cadastre", name="Parcelles cadastrales",
-                overlay=True, opacity=0.9,
-            ).add_to(mc)
-            folium.Marker([lat, lon], tooltip="Adresse recherchée",
-                          icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(mc)
-            components.html(mc._repr_html_(), height=440)
-            st.caption(
-                "Couche cadastrale officielle IGN (numéros de parcelle visibles en "
-                "zoomant). Si elle ne s'affiche pas, utilisez le lien Cadastre "
-                "dans la section 'Analyser ce bien' plus bas."
-            )
-        except Exception as exc:
-            st.warning(f"Vue cadastre indisponible ({exc}) — utilisez le lien Cadastre plus bas dans la page.")
+        cadastre_url = f"https://www.cadastre.gouv.fr/scpc/rechercherPlan.do?lat={lat}&lon={lon}"
+        components.html(
+            f'<iframe src="{cadastre_url}" width="100%" height="420" style="border:0;" loading="lazy"></iframe>',
+            height=440,
+        )
+        st.caption(
+            "Plan cadastral officiel (cadastre.gouv.fr), avec les numéros de "
+            "parcelle. Si la carte ne s'affiche pas ci-dessus (certains "
+            "navigateurs bloquent son intégration), utilisez le lien Cadastre "
+            "dans la section 'Analyser ce bien' plus bas pour l'ouvrir directement."
+        )
+        st.link_button("Ouvrir cadastre.gouv.fr dans un nouvel onglet", cadastre_url, use_container_width=True)
 
     with t3:
         earth = core.google_earth_url(lat, lon)
@@ -491,33 +473,40 @@ with tab_recherche:
                 with st.spinner("Transports à proximité (OpenStreetMap)..."):
                     transports = core.find_nearby_transport(lat, lon)
 
-                st.markdown("**Parcelle cadastrale**")
+                st.markdown("**Parcelle(s) cadastrale(s) à proximité immédiate**")
                 if parcelle is None:
                     st.caption(
-                        "Parcelle non trouvée automatiquement. Cela peut arriver si "
-                        "le point tombe juste en dehors d'une parcelle ou si l'API "
-                        "est temporairement indisponible."
+                        "Aucune parcelle trouvée automatiquement à ce point. Cela "
+                        "peut arriver en zone non cadastrée ou si l'API est "
+                        "temporairement indisponible."
                     )
                 else:
-                    pc1, pc2, pc3 = st.columns(3)
-                    pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
-                    pc2.metric("Section / numéro",
-                               f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
-                    pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
                     nb = parcelle.get("nb_parcelles") or 1
                     if nb > 1:
+                        st.dataframe(
+                            pd.DataFrame(parcelle["parcelles"])[["section", "numero", "contenance_m2"]],
+                            use_container_width=True,
+                        )
                         st.caption(
-                            f"ℹ️ {nb} parcelles cadastrales adjacentes trouvées à ce "
-                            "point — contenance totale additionnée. Vérifiez via le "
-                            "lien Cadastre ci-dessus si ce découpage correspond bien "
-                            "à ce que vous attendiez."
+                            f"⚠️ {nb} parcelles trouvées dans un rayon de 10 m autour du "
+                            "point recherché — l'adresse géocodée tombe parfois sur la "
+                            "voie plutôt que sur la parcelle bâtie réelle. **Vérifiez "
+                            "laquelle correspond vraiment à ce bien** via l'onglet "
+                            "'📐 Cadastre' ou le lien Cadastre ci-dessus avant de vous "
+                            "fier à l'estimation de réserve foncière plus bas."
                         )
                     else:
+                        pc1, pc2, pc3 = st.columns(3)
+                        pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
+                        pc2.metric("Section / numéro",
+                                   f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
+                        pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
                         st.caption(
                             "Rappel : la contenance est la surface du **terrain** "
                             "(cadastre), pas la surface habitable — une maison "
                             "étroite sur plusieurs étages peut avoir une contenance "
-                            "bien plus petite que sa surface habitable totale."
+                            "bien plus petite que sa surface habitable totale. "
+                            "Vérifiez via l'onglet '📐 Cadastre' en cas de doute."
                         )
 
                 st.markdown("**Zone PLU**")
