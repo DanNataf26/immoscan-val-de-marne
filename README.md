@@ -110,6 +110,48 @@ proposé permet une vérification manuelle gratuite sans clé.
 proximité (signal de dynamisme d'un quartier) nécessiteraient l'API Sitadel
 (data.gouv.fr) ou Pappers Immo — à explorer plus tard si utile.
 
+## Historique complémentaire 2014-2020 (Cerema DVF+)
+
+En complément de la source principale (geo-dvf, 2021 et après), l'app peut
+intégrer les données **Cerema DVF+** pour étendre l'historique jusqu'à 2014.
+
+**Source et licence** : Cerema, *DVF+ open-data*
+(https://datafoncier.cerema.fr/donnees/autres-donnees-foncieres/dvfplus-open-data),
+Licence Ouverte v2.0 (Etalab) — réutilisation libre sous réserve de
+mentionner la source, ce que l'app fait automatiquement (colonne "source"
+dans les tableaux d'historique et de comparables).
+
+**Import manuel obligatoire** : contrairement à geo-dvf, ces fichiers sont
+distribués via des archives ZIP sur Box.com
+(cerema.app.box.com/v/dvfplus-opendata), sans URL directe automatisable par
+département. Depuis "Options avancées" dans la barre latérale : téléchargez
+l'archive de votre région sur ce lien, puis déposez-la dans l'app — elle est
+alors automatiquement filtrée pour votre département, nettoyée, et mise en
+cache localement (pas besoin de la re-déposer à chaque session).
+
+**Différences avec geo-dvf, importantes à connaître** :
+- **Pas de champ adresse** (numéro + rue) dans cette source — seulement des
+  identifiants de parcelle. Elle n'est donc **pas utilisée** pour la
+  recherche initiale par adresse, mais pour deux compléments :
+  1. **Comparables** : ventes proches par coordonnées GPS (comme geo-dvf),
+     simplement sur une période plus large.
+  2. **Historique d'un bien précis** : uniquement si une vente DVF récente
+     (2021+) a déjà permis de confirmer l'identifiant de parcelle exact de
+     ce bien — l'app cherche alors les ventes plus anciennes de cette même
+     parcelle dans Cerema DVF+. Sans correspondance récente confirmée, pas
+     de rattachement historique possible par ce biais.
+- Seules les mutations "mono-type" sont conservées (uniquement des maisons,
+  ou uniquement des appartements) pour rester cohérent avec le reste de
+  l'app ; les mutations mixtes sont écartées.
+- Coordonnées converties depuis Lambert-93 (EPSG:2154) en pur Python (sans
+  dépendance pyproj), validées à ~10m près sur un point de référence connu.
+
+**Piste explorée mais non retenue pour l'instant** : une vraie API REST du
+Cerema existe (`apidf-preprod.cerema.fr`, module Python `apifoncier`) qui
+permettrait un import automatique par commune, sans téléchargement manuel.
+Elle est en préproduction (bêta) et son mode d'authentification n'a pas été
+vérifié — à explorer si l'import manuel devient contraignant.
+
 ## Limites importantes
 
 **Suggestions automatiques pendant la frappe : composant maison (`st_address_search/`).**

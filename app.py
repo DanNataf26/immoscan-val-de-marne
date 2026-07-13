@@ -192,6 +192,33 @@ with st.sidebar.expander("Options avancées"):
     annees = list(range(annee_min, annee_max + 1))
     force_refresh = st.button("🔄 Forcer un nouveau téléchargement + recalcul", use_container_width=True)
 
+    st.divider()
+    st.markdown("**Historique complémentaire 2014-2020 (Cerema DVF+)**")
+    st.caption(
+        "Source : Cerema, DVF+ open-data (Licence Ouverte v2.0, Etalab) — "
+        "https://datafoncier.cerema.fr/donnees/autres-donnees-foncieres/dvfplus-open-data. "
+        "Téléchargement manuel requis (fichiers distribués en archives ZIP, "
+        "pas d'URL directe automatisable) : rendez-vous sur "
+        "cerema.app.box.com/v/dvfplus-opendata, téléchargez l'archive de "
+        "votre région, puis déposez-la ci-dessous."
+    )
+    cerema_zip = st.file_uploader("Archive ZIP Cerema DVF+", type=["zip"], key="cerema_zip_upload")
+    if cerema_zip is not None:
+        if st.button("Importer pour ce département", key="cerema_import_button"):
+            with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
+                tmp_path = core.OUTPUT_DIR / f"_tmp_cerema_{dept}.zip"
+                core.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                tmp_path.write_bytes(cerema_zip.getvalue())
+                try:
+                    msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                    st.success(msg)
+                except SystemExit as e:
+                    st.error(str(e))
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+    if (core.OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv").exists():
+        st.caption(f"✅ Historique Cerema DVF+ déjà importé pour le {dept}.")
+
 st.sidebar.divider()
 st.sidebar.markdown("**Préparation des données**")
 

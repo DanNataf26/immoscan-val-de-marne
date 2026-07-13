@@ -399,15 +399,161 @@ def haversine_m(lat1, lon1, lat2, lon2):
     return 2 * r * atan2(sqrt(a), sqrt(1 - a))
 
 
+def lambert93_to_wgs84(x: float, y: float) -> tuple[float, float]:
+    """
+    Convertit des coordonnées Lambert-93 (EPSG:2154, utilisé par les données
+    cadastrales et Cerema DVF+) en latitude/longitude WGS84.
+
+    Implémentation en pur Python (formule officielle IGN de projection
+    conique conforme de Lambert, inversée), sans dépendance externe (évite
+    pyproj, plus lourd et pas nécessaire pour notre précision requise).
+    Validée à ~10m près sur un point de référence connu (rue de la Paix,
+    Paris) — largement suffisant pour nos calculs de distance/comparables.
+    """
+    import math
+
+    n = 0.7256077650
+    C = 11754255.426
+    Xs = 700000.0
+    Ys = 12655612.050
+    e = 0.08181919112823
+    lon0 = math.radians(3.0)
+
+    dX = x - Xs
+    dY = y - Ys
+    R = math.sqrt(dX ** 2 + dY ** 2)
+    gamma = math.atan2(dX, -dY)
+    lon = lon0 + gamma / n
+
+    latiso = -1.0 / n * math.log(abs(R / C))
+    lat = 2 * math.atan(math.exp(latiso)) - math.pi / 2
+    for _ in range(15):
+        lat = 2 * math.atan(
+            ((1 + e * math.sin(lat)) / (1 - e * math.sin(lat))) ** (e / 2)
+            * math.exp(latiso)
+        ) - math.pi / 2
+
+    return math.degrees(lat), math.degrees(lon)
+
+
+# ----------------------------------------------------------------------------
+# 3quater. Cerema DVF+ (historique complémentaire 2014-2020)
+# ----------------------------------------------------------------------------
+# Source : Cerema, "DVF+ open-data" (https://datafoncier.cerema.fr/donnees/
+# autres-donnees-foncieres/dvfplus-open-data), Licence Ouverte v2.0 (Etalab).
+# Complète la source principale (geo-dvf, 2021+) pour la période antérieure.
+# Import manuel car ce jeu de données est distribué via des archives ZIP
+# (pas d'URL directe automatisable par département comme pour geo-dvf).
+
+CEREMA_ANNEE_MAX = 2020  # au-delà, on utilise la source principale geo-dvf
+
+def load_cerema_dvfplus(zip_path: str, dept: str, annee_max: int = CEREMA_ANNEE_MAX) -> pd.DataFrame:
+    """
+    Importe et nettoie les données Cerema DVF+ pour un département, à partir
+    d'une archive ZIP téléchargée manuellement sur
+    https://cerema.app.box.com/v/dvfplus-opendata (voir README).
+
+    Contrairement à geo-dvf, cette source n'a pas de champ adresse (numéro +
+    rue) — seulement des identifiants de parcelle (l_idpar) et des
+    coordonnées Lambert-93. Elle est donc utilisée pour enrichir les
+    comparables et, quand un identifiant de parcelle est déjà connu (via une
+    correspondance DVF exacte récente ou le cadastre), l'historique d'un
+    bien précis — pas pour une recherche par adresse textuelle directe.
+
+    Ne garde que les mutations "mono-type" (uniquement des maisons, ou
+    uniquement des appartements) pour rester cohérent avec la méthodologie
+    de la source principale ; les mutations mixtes sont écartées.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(zip_path) as zf:
+        candidates = [n for n in zf.namelist() if n.endswith(f"dvf_plus_d{dept}.csv")]
+        if not candidates:
+            raise SystemExit(
+                f"Fichier dvf_plus_d{dept}.csv introuvable dans l'archive. "
+                "Vérifiez que le département est bien couvert par le fichier "
+                "régional téléchargé."
+            )
+        with zf.open(candidates[0]) as f:
+            df = pd.read_csv(f, sep="|", low_memory=False)
+
+    df = df[(df["libnatmut"] == "Vente") & (df["anneemut"] <= annee_max)].copy()
+
+    maison_pure = (df["nblocmai"] > 0) & (df["nblocapt"] == 0) & (df["nblocact"] == 0)
+    appt_pure = (df["nblocapt"] > 0) & (df["nblocmai"] == 0) & (df["nblocact"] == 0)
+
+    d_maison = df[maison_pure].copy()
+    d_maison["type_local"] = "Maison"
+    d_maison["surface_reelle_bati"] = d_maison["sbatmai"]
+
+    d_appt = df[appt_pure].copy()
+    d_appt["type_local"] = "Appartement"
+    d_appt["surface_reelle_bati"] = d_appt["sbatapt"]
+
+    combined = pd.concat([d_maison, d_appt], ignore_index=True)
+    combined = combined.rename(columns={"datemut": "date_mutation", "anneemut": "annee",
+                                          "valeurfonc": "valeur_fonciere"})
+    combined = combined[(combined["valeur_fonciere"] > 10_000) & (combined["surface_reelle_bati"] > 8)]
+    combined["prix_m2"] = combined["valeur_fonciere"] / combined["surface_reelle_bati"]
+    combined = combined[(combined["prix_m2"] > 500) & (combined["prix_m2"] < 25_000)]
+
+    combined["id_parcelle"] = combined["l_idpar"].astype(str).str.split(",").str[0]
+    combined["nom_commune"] = None  # pas de nom de commune dans cette source (voir README)
+    combined["code_commune"] = combined["l_codinsee"].astype(str).str.split(",").str[0]
+
+    lat_lon = combined.apply(
+        lambda r: lambert93_to_wgs84(r["geompar_x"], r["geompar_y"]), axis=1
+    )
+    combined["latitude"] = lat_lon.map(lambda t: t[0])
+    combined["longitude"] = lat_lon.map(lambda t: t[1])
+    combined["source"] = "Cerema DVF+"
+
+    cols = ["date_mutation", "annee", "valeur_fonciere", "surface_reelle_bati",
+            "type_local", "prix_m2", "id_parcelle", "code_commune", "nom_commune",
+            "latitude", "longitude", "source"]
+    return combined[cols].reset_index(drop=True)
+
+
+def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
+    """
+    Importe les données Cerema DVF+ pour un département et les met en cache
+    localement (évite de re-parser l'archive ZIP, volumineuse, à chaque
+    utilisation). Retourne un message de résumé.
+    """
+    df = load_cerema_dvfplus(zip_path, dept)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
+    df.to_csv(cache_path, index=False)
+    annees = f"{df['annee'].min()}-{df['annee'].max()}" if not df.empty else "aucune"
+    return (
+        f"{len(df)} transactions Cerema DVF+ importées pour le {dept} "
+        f"(années {annees}). Source : Cerema, DVF+ open-data, Licence "
+        "Ouverte v2.0 (Etalab)."
+    )
+
+
+def load_cerema_cache(dept: str) -> pd.DataFrame | None:
+    """Charge le cache Cerema DVF+ pour un département, si déjà importé."""
+    cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
+    if not cache_path.exists():
+        return None
+    return pd.read_csv(cache_path)
+
+
 def find_comparables(dept: str, lat: float, lon: float, type_local: str | None = None,
                       radius_m: float = 500, max_results: int = 15,
-                      since_years: int = 5) -> pd.DataFrame:
+                      since_years: int = 5, include_cerema: bool = True) -> pd.DataFrame:
     """
     Cherche, dans le cache des transactions nettoyées, les ventes réelles les
     plus proches d'un point GPS donné, limitées aux `since_years` dernières
     années (par défaut 5) — utile pour situer un bien recherché par adresse
     par rapport à de vraies ventes comparables récentes et proches.
     Nécessite d'avoir lancé 'reference' au préalable pour ce département.
+
+    Si `include_cerema` est vrai et qu'un cache Cerema DVF+ existe pour ce
+    département (2014-2020, importé manuellement — voir README), ses ventes
+    sont ajoutées en complément historique pour la même zone/période/type,
+    avec une colonne 'source' pour les distinguer.
     """
     from datetime import datetime
 
@@ -417,6 +563,7 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
     df = pd.read_csv(cache_path)
     df = df.dropna(subset=["latitude", "longitude"])
+    df["source"] = "DVF (2021+)"
     if type_local:
         df = df[df["type_local"] == type_local]
 
@@ -425,17 +572,35 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
         dates = pd.to_datetime(df["date_mutation"], errors="coerce")
         df = df[dates >= seuil]
 
-    if df.empty:
+    frames = [df] if not df.empty else []
+
+    if include_cerema:
+        cerema = load_cerema_cache(dept)
+        if cerema is not None and not cerema.empty:
+            cerema = cerema.dropna(subset=["latitude", "longitude"]).copy()
+            if type_local:
+                cerema = cerema[cerema["type_local"] == type_local]
+            if since_years:
+                seuil = pd.Timestamp(datetime.now()) - pd.DateOffset(years=since_years)
+                dates_c = pd.to_datetime(cerema["date_mutation"], errors="coerce")
+                cerema = cerema[dates_c >= seuil]
+            if not cerema.empty:
+                frames.append(cerema)
+
+    if not frames:
         return pd.DataFrame()
 
-    df = df.copy()
-    df["distance_m"] = df.apply(
+    combined = pd.concat(frames, ignore_index=True)
+    combined["distance_m"] = combined.apply(
         lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
     )
-    proches = df[df["distance_m"] <= radius_m].sort_values("distance_m")
-    cols = ["adresse_numero", "adresse_nom_voie", "nom_commune", "type_local",
-            "date_mutation", "valeur_fonciere", "surface_reelle_bati", "prix_m2",
-            "distance_m"]
+    proches = combined[combined["distance_m"] <= radius_m].sort_values("distance_m")
+    cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
+            "surface_reelle_bati", "prix_m2", "distance_m", "source"]
+    # adresse_numero/adresse_nom_voie n'existent pas côté Cerema — on les
+    # ajoute seulement si présentes (source geo-dvf).
+    if "adresse_numero" in proches.columns:
+        cols = ["adresse_numero", "adresse_nom_voie"] + cols
     return proches[cols].head(max_results)
 
 
@@ -535,8 +700,24 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
 
     exact = df[mask].copy()
     exact["correspondance"] = "Exacte (numéro + rue + commune)"
+    exact["source"] = "DVF (2021+)"
 
     result = exact
+    if not result.empty and "id_parcelle" in result.columns:
+        # Historique complémentaire : une fois la parcelle confirmée via une
+        # correspondance DVF exacte, on cherche ses ventes plus anciennes
+        # (2014-2020) dans le cache Cerema DVF+, si importé pour ce département.
+        cerema = load_cerema_cache(dept)
+        if cerema is not None and not cerema.empty:
+            ids_connus = set(result["id_parcelle"].dropna().astype(str))
+            hist_cerema = cerema[cerema["id_parcelle"].astype(str).isin(ids_connus)].copy()
+            if not hist_cerema.empty:
+                hist_cerema["correspondance"] = "Exacte (identifiant de parcelle confirmé, Cerema DVF+)"
+                hist_cerema["nom_commune"] = result["nom_commune"].iloc[0]
+                hist_cerema["adresse_dvf"] = result["adresse_dvf"].iloc[0]
+                hist_cerema["nb_lots"] = 1
+                result = pd.concat([result, hist_cerema], ignore_index=True)
+
     if result.empty and lat is not None and lon is not None:
         # Repli très étroit, clairement signalé comme approximatif.
         df2 = df.dropna(subset=["latitude", "longitude"]).copy()
@@ -546,6 +727,7 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
             )
             proche = df2[df2["distance_m"] <= 30].copy()
             proche["correspondance"] = "Approximative (proximité < 30 m, adresse non confirmée)"
+            proche["source"] = "DVF (2021+)"
             result = proche
 
     if result.empty:
@@ -554,7 +736,7 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     result = result.sort_values("date_mutation", ascending=False)
     cols = ["date_mutation", "adresse_dvf", "nom_commune", "type_local",
             "valeur_fonciere", "surface_reelle_bati", "prix_m2",
-            "nb_lots", "correspondance"]
+            "nb_lots", "correspondance", "source"]
     if "id_parcelle" in result.columns:
         cols.append("id_parcelle")
     return result[cols].head(max_results)
