@@ -152,6 +152,28 @@ permettrait un import automatique par commune, sans téléchargement manuel.
 Elle est en préproduction (bêta) et son mode d'authentification n'a pas été
 vérifié — à explorer si l'import manuel devient contraignant.
 
+## Année de construction (BDNB)
+
+Section de l'onglet `🔍 Rechercher un bien`, juste après le DPE. Utilise
+l'**API BDNB** (Base de Données Nationale des Bâtiments, CSTB) — gratuite,
+sans clé, sans authentification. Elle croise cadastre, BDTopo IGN et
+Fichiers fonciers pour donner une carte d'identité par bâtiment, incluant
+l'année de construction — une donnée que DVF ne fournit pas du tout.
+
+**Non vérifié en conditions réelles** (pas d'accès réseau dans l'environnement
+de développement) : la logique suit la documentation publique de l'API
+(protocole PostgREST, endpoint `/bbox`), avec plusieurs noms de champs
+candidats pour l'année de construction (susceptibles de changer selon les
+millésimes de la base). Si l'information ne remonte jamais, il faudra
+vérifier le nom exact des colonnes de la table `batiment_groupe_complet`
+sur https://api-portail.bdnb.io.
+
+**Non retenues pour l'instant** (voir échanges précédents) :
+- **Nom du propriétaire** : non disponible en open data par conception —
+  protection RGPD volontaire. Réservé aux ayants-droit (Fichiers Fonciers).
+- **Actes authentiques** : documents privés entre les parties, jamais
+  publiés — DVF n'en est qu'un extrait de quelques champs.
+
 ## Limites importantes
 
 **Suggestions automatiques pendant la frappe : composant maison (`st_address_search/`).**

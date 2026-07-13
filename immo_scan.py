@@ -1132,6 +1132,58 @@ def interpret_dpe_classe(dpe: pd.DataFrame | None) -> dict | None:
     return {"classe_energie": classe_energie, "classe_ges": classe_ges, "note": note}
 
 
+BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
+
+
+def get_batiment_bdnb(lat: float, lon: float, radius_m: float = 40) -> dict | None:
+    """
+    Récupère la carte d'identité du bâtiment le plus proche via l'API BDNB
+    (Base de Données Nationale des Bâtiments, CSTB) — gratuite, sans clé,
+    croise cadastre + BDTopo IGN + Fichiers fonciers. Utilisée ici
+    principalement pour l'année de construction, absente des données DVF.
+
+    NB : cette intégration n'a pas pu être testée en conditions réelles au
+    moment de l'écriture (pas d'accès réseau dans l'environnement de
+    développement) — la logique suit la documentation publique de l'API
+    (protocole PostgREST), mais le nom exact des colonnes de la table
+    "complète" (100+ champs) n'a pas pu être vérifié précisément. Plusieurs
+    candidats sont essayés pour l'année de construction ; à ajuster si
+    besoin après un premier test réel.
+    """
+    import requests, math
+
+    d_lat = radius_m / 111_320
+    d_lon = radius_m / (111_320 * max(math.cos(math.radians(lat)), 0.1))
+    bbox = f"{lon - d_lon},{lat - d_lat},{lon + d_lon},{lat + d_lat}"
+
+    try:
+        resp = requests.get(BDNB_API_URL, params={"bbox": bbox}, timeout=10)
+        resp.raise_for_status()
+        results = resp.json()
+        if not results:
+            return None
+        premier = results[0]
+
+        candidats_annee = [
+            "annee_construction", "date_construction", "annee_construction_estimation",
+            "millesime_annee_construction", "ffo_bat_annee_construction",
+        ]
+        annee = None
+        for col in candidats_annee:
+            if col in premier and premier[col]:
+                annee = premier[col]
+                break
+
+        return {
+            "annee_construction": annee,
+            "identifiant_bdnb": premier.get("batiment_groupe_id"),
+            "brut": premier,  # gardé pour inspection/diagnostic si besoin
+        }
+    except Exception as exc:
+        print(f"[warn] BDNB échoué pour ({lat}, {lon}) : {exc}")
+        return None
+
+
 # ----------------------------------------------------------------------------
 # 4. Score d'une annonce / d'un bien repéré
 # ----------------------------------------------------------------------------

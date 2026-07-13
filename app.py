@@ -397,6 +397,24 @@ with tab_recherche:
                 "l'historique DVF) — seule une correspondance exacte le fait."
             )
 
+        st.subheader("Année de construction (BDNB)")
+        with st.spinner("Recherche BDNB..."):
+            batiment = core.get_batiment_bdnb(geo["latitude"], geo["longitude"])
+        if batiment is None or not batiment.get("annee_construction"):
+            st.caption(
+                "Année de construction non trouvée automatiquement pour ce "
+                "bâtiment (donnée parfois manquante ou non encore croisée "
+                "dans la BDNB)."
+            )
+        else:
+            st.metric("Année de construction estimée", batiment["annee_construction"])
+            st.caption(
+                "Source : BDNB (Base de Données Nationale des Bâtiments, CSTB) — "
+                "croise cadastre, BDTopo IGN et Fichiers fonciers. Peut être une "
+                "estimation statistique plutôt qu'une donnée certaine selon les "
+                "bâtiments — à vérifier si un doute important."
+            )
+
         if suggested_surface and suggested_type:
             st.caption(
                 "💡 Surface et type trouvés via une vente exacte de ce bien : "
