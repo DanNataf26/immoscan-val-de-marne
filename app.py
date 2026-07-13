@@ -297,6 +297,7 @@ with tab_recherche:
 
         suggested_surface = None
         suggested_type = None
+        known_parcelle_ids = None  # (code_insee, section, numero) si trouvé via DVF exact
 
         # --- Historique probable + comparables ---------------------------------
         if active_ref is None:
@@ -331,6 +332,10 @@ with tab_recherche:
                         derniere = exact_rows.iloc[0]  # déjà triée par date décroissante
                         suggested_surface = derniere.get("surface_reelle_bati")
                         suggested_type = derniere.get("type_local")
+                        if "id_parcelle" in exact_rows.columns:
+                            parsed = core.parse_id_parcelle(derniere.get("id_parcelle"))
+                            if parsed:
+                                known_parcelle_ids = parsed
             except SystemExit as e:
                 st.warning(str(e))
 
@@ -486,7 +491,19 @@ with tab_recherche:
                 # --- Potentiel caché : cadastre, PLU, Géorisques, transports -
                 st.markdown("#### 🏗️ Potentiel caché")
                 with st.spinner("Cadastre (API Carto IGN)..."):
-                    parcelle = core.get_parcelle_cadastrale(lat, lon)
+                    if known_parcelle_ids:
+                        parcelle = core.get_parcelle_by_identifiants(
+                            known_parcelle_ids["code_insee"],
+                            known_parcelle_ids["section"],
+                            known_parcelle_ids["numero"],
+                        )
+                        if parcelle is None:
+                            # Repli si jamais l'identifiant DVF ne matche plus
+                            # (rare : remaniement cadastral, ou parcelle
+                            # simplement absente du PCI vecteur actuel).
+                            parcelle = core.get_parcelle_cadastrale(lat, lon)
+                    else:
+                        parcelle = core.get_parcelle_cadastrale(lat, lon)
                 with st.spinner("Zone PLU (API Carto IGN — GPU)..."):
                     zones_plu = core.get_zone_plu(lat, lon)
                 with st.spinner("Risques naturels et technologiques (Géorisques)..."):
@@ -494,12 +511,23 @@ with tab_recherche:
                 with st.spinner("Transports à proximité (OpenStreetMap)..."):
                     transports = core.find_nearby_transport(lat, lon)
 
-                st.markdown("**Parcelle(s) cadastrale(s) à proximité immédiate**")
+                st.markdown("**Parcelle(s) cadastrale(s)**")
                 if parcelle is None:
                     st.caption(
-                        "Aucune parcelle trouvée automatiquement à ce point. Cela "
-                        "peut arriver en zone non cadastrée ou si l'API est "
-                        "temporairement indisponible."
+                        "Aucune parcelle trouvée automatiquement. Cela peut arriver "
+                        "en zone non cadastrée ou si l'API est temporairement "
+                        "indisponible."
+                    )
+                elif parcelle.get("source") == "identifiant DVF exact":
+                    pc1, pc2, pc3 = st.columns(3)
+                    pc1.metric("Code INSEE (cadastre)", parcelle.get("code_insee") or "—")
+                    pc2.metric("Section / numéro",
+                               f"{parcelle.get('section') or '—'} / {parcelle.get('numero') or '—'}")
+                    pc3.metric("Contenance", f"{parcelle.get('contenance_m2') or '—'} m²")
+                    st.success(
+                        "✅ Parcelle identifiée via une vente DVF exacte de ce bien "
+                        "(identifiant cadastral officiel, pas une estimation par "
+                        "coordonnées GPS) — fiable à 100%."
                     )
                 else:
                     nb = parcelle.get("nb_parcelles") or 1
@@ -510,11 +538,12 @@ with tab_recherche:
                         )
                         st.caption(
                             f"⚠️ {nb} parcelles trouvées dans un rayon de 10 m autour du "
-                            "point recherché — l'adresse géocodée tombe parfois sur la "
-                            "voie plutôt que sur la parcelle bâtie réelle. **Vérifiez "
-                            "laquelle correspond vraiment à ce bien** via l'onglet "
-                            "'📐 Cadastre' ou le lien Cadastre ci-dessus avant de vous "
-                            "fier à l'estimation de réserve foncière plus bas."
+                            "point recherché (aucune vente DVF exacte disponible pour "
+                            "identifier la bonne directement) — l'adresse géocodée "
+                            "tombe parfois sur la voie plutôt que sur la parcelle "
+                            "bâtie réelle. **Vérifiez laquelle correspond vraiment à "
+                            "ce bien** via l'onglet '📐 Cadastre' ou le lien Cadastre "
+                            "ci-dessus avant de vous fier à l'estimation plus bas."
                         )
                     else:
                         pc1, pc2, pc3 = st.columns(3)

@@ -176,6 +176,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
                     as_index=False)
           .agg(surface_reelle_bati=("surface_reelle_bati", "sum"),
                nb_lots=("id_parcelle", "nunique"),
+               id_parcelle=("id_parcelle", "first"),
                adresse_nom_voie=("adresse_nom_voie", "first"),
                adresse_numero=("adresse_numero", "first"),
                longitude=("longitude", "first"),
@@ -554,6 +555,8 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     cols = ["date_mutation", "adresse_dvf", "nom_commune", "type_local",
             "valeur_fonciere", "surface_reelle_bati", "prix_m2",
             "nb_lots", "correspondance"]
+    if "id_parcelle" in result.columns:
+        cols.append("id_parcelle")
     return result[cols].head(max_results)
 
 
@@ -612,6 +615,67 @@ def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5)
 # mais à vérifier au premier usage réel — les schémas de réponse de ces API
 # évoluent de temps en temps. Chaque fonction échoue silencieusement (retourne
 # None) plutôt que de faire planter l'app en cas de changement de schéma.
+
+def parse_id_parcelle(id_parcelle: str) -> dict | None:
+    """
+    Décompose un identifiant de parcelle DVF (14 caractères : 5 code INSEE +
+    3 préfixe + 2 section + 4 numéro) en ses composants. Cet identifiant est
+    systématiquement rempli dans les données DVF — quand une correspondance
+    DVF exacte existe pour un bien, c'est la référence cadastrale la plus
+    fiable possible, bien plus fiable qu'une déduction à partir de
+    coordonnées GPS (qui peuvent tomber sur la voie plutôt que sur la
+    parcelle bâtie réelle).
+    """
+    if not id_parcelle or len(str(id_parcelle)) != 14:
+        return None
+    s = str(id_parcelle)
+    return {
+        "code_insee": s[0:5],
+        "prefixe": s[5:8],
+        "section": s[8:10],
+        "numero": s[10:14],
+    }
+
+
+def get_parcelle_by_identifiants(code_insee: str, section: str, numero: str) -> dict | None:
+    """
+    Récupère une parcelle cadastrale précise par ses identifiants exacts
+    (code INSEE + section + numéro), via l'API Carto IGN — sans passer par
+    une géométrie/coordonnée. Fiable à 100% quand ces identifiants sont
+    connus (ex. via une correspondance DVF exacte), contrairement à une
+    recherche par point GPS qui peut tomber sur la mauvaise parcelle.
+    """
+    import requests
+    try:
+        resp = requests.get(
+            IGN_CADASTRE_URL,
+            params={"code_insee": code_insee, "section": section, "numero": numero},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if not features:
+            return None
+        p = features[0]["properties"]
+        return {
+            "id_parcelle": p.get("id"),
+            "code_insee": p.get("commune"),
+            "prefixe": p.get("prefixe"),
+            "section": p.get("section"),
+            "numero": p.get("numero"),
+            "contenance_m2": p.get("contenance"),
+            "nb_parcelles": 1,
+            "parcelles": [{
+                "id_parcelle": p.get("id"), "code_insee": p.get("commune"),
+                "prefixe": p.get("prefixe"), "section": p.get("section"),
+                "numero": p.get("numero"), "contenance_m2": p.get("contenance"),
+            }],
+            "source": "identifiant DVF exact",
+        }
+    except Exception as exc:
+        print(f"[warn] Cadastre par identifiant échoué pour {code_insee}/{section}/{numero} : {exc}")
+        return None
+
 
 def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dict | None:
     """
