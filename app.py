@@ -75,12 +75,17 @@ def reference_exists(dept: str) -> bool:
 
 
 def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
-    t1, t2, t3 = st.tabs(["🗺️ Carte géolocalisation", "🌍 Vue Google Earth", "🚶 Vue Google Street"])
+    t1, t2, t3, t4 = st.tabs([
+        "🗺️ Carte géolocalisation", "📐 Cadastre", "🌍 Vue Google Earth", "🚶 Vue Google Street",
+    ])
 
     with t1:
         try:
             import folium
-            m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
+            if radius_m:
+                m = folium.Map(location=[lat, lon], tiles="OpenStreetMap")
+            else:
+                m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
             folium.Marker(
                 [lat, lon], tooltip="Adresse recherchée",
                 icon=folium.Icon(color="red", icon="home", prefix="fa"),
@@ -91,6 +96,15 @@ def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
                     fill=True, fill_opacity=0.10,
                     tooltip=f"Rayon comparables : {int(radius_m)} m",
                 ).add_to(m)
+                # On cadre la vue pour que tout le cercle soit visible, plutôt
+                # qu'un zoom fixe qui le coupait pour les grands rayons.
+                from math import cos, radians
+                delta_lat = radius_m / 111_320
+                delta_lon = radius_m / (111_320 * max(cos(radians(lat)), 0.1))
+                m.fit_bounds([
+                    [lat - delta_lat, lon - delta_lon],
+                    [lat + delta_lat, lon + delta_lon],
+                ])
             components.html(m._repr_html_(), height=440)
             if radius_m:
                 st.caption(f"Le cercle rouge représente le rayon de {int(radius_m)} m utilisé pour les comparables.")
@@ -99,6 +113,38 @@ def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
         st.link_button("Ouvrir dans Google Maps", core.google_maps_url(lat, lon), use_container_width=True)
 
     with t2:
+        try:
+            import folium
+            mc = folium.Map(location=[lat, lon], zoom_start=19, tiles=None)
+            folium.TileLayer(
+                tiles=(
+                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
+                    "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM"
+                    "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg"
+                ),
+                attr="IGN-F/Géoportail", name="Photos aériennes", overlay=False,
+            ).add_to(mc)
+            folium.TileLayer(
+                tiles=(
+                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
+                    "&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI vecteur"
+                    "&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png"
+                ),
+                attr="IGN-F/Géoportail — Cadastre", name="Parcelles cadastrales",
+                overlay=True, opacity=0.9,
+            ).add_to(mc)
+            folium.Marker([lat, lon], tooltip="Adresse recherchée",
+                          icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(mc)
+            components.html(mc._repr_html_(), height=440)
+            st.caption(
+                "Couche cadastrale officielle IGN (numéros de parcelle visibles en "
+                "zoomant). Si elle ne s'affiche pas, utilisez le lien Cadastre "
+                "dans la section 'Analyser ce bien' plus bas."
+            )
+        except Exception as exc:
+            st.warning(f"Vue cadastre indisponible ({exc}) — utilisez le lien Cadastre plus bas dans la page.")
+
+    with t3:
         earth = core.google_earth_url(lat, lon)
         satellite = f"https://maps.google.com/maps?q={lat},{lon}&t=k&z=18&output=embed"
         components.html(
@@ -107,7 +153,7 @@ def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
         )
         st.link_button("Ouvrir dans Google Earth", earth, use_container_width=True)
 
-    with t3:
+    with t4:
         street = core.google_street_view_url(lat, lon)
         street_embed = f"https://maps.google.com/maps?q=&layer=c&cbll={lat},{lon}&cbp=12,0,0,0,0&output=svembed"
         components.html(
@@ -125,18 +171,22 @@ dept_label = st.sidebar.selectbox("Département de travail", list(DEPARTEMENTS_F
 dept = DEPARTEMENTS_FRANCE[dept_label]
 
 with st.sidebar.expander("Options avancées"):
-    annees = st.multiselect(
-        "Années DVF à utiliser",
-        ANNEES_DISPONIBLES,
-        default=ANNEES_DISPONIBLES,
+    annee_min, annee_max = st.slider(
+        "Années DVF à utiliser (plage)",
+        min_value=min(ANNEES_DISPONIBLES), max_value=max(ANNEES_DISPONIBLES),
+        value=(min(ANNEES_DISPONIBLES), max(ANNEES_DISPONIBLES)),
         help=(
-            "Détermine les données disponibles pour TOUT le reste de l'app : "
-            "l'historique du bien les utilise toutes, et le curseur 'dernières "
-            "N années' des comparables ne peut pas dépasser ce qui est chargé "
-            "ici. Pour toute la France, travaillez département par département "
-            "pour éviter des téléchargements très lourds."
+            f"Plage réellement disponible auprès de la source DVF utilisée : "
+            f"{min(ANNEES_DISPONIBLES)}-{max(ANNEES_DISPONIBLES)} (au-delà, une "
+            "autre source type Cerema DVF+ serait nécessaire). Détermine les "
+            "données disponibles pour TOUT le reste de l'app : l'historique du "
+            "bien les utilise toutes, et le curseur 'dernières N années' des "
+            "comparables ne peut pas dépasser cette plage. Pour toute la France, "
+            "travaillez département par département pour éviter des "
+            "téléchargements très lourds.",
         ),
     )
+    annees = list(range(annee_min, annee_max + 1))
     force_refresh = st.button("🔄 Forcer un nouveau téléchargement + recalcul", use_container_width=True)
 
 st.sidebar.divider()
