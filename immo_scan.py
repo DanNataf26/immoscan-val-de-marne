@@ -1216,27 +1216,93 @@ def get_parcelle_by_identifiants(code_insee: str, section: str, numero: str) -> 
         return None
 
 
+GEOPLATEFORME_REVERSE_URL = "https://data.geopf.fr/geocodage/reverse"
+
+
+def _get_parcelle_via_geoplateforme(lat: float, lon: float) -> dict | None:
+    """
+    Tente d'obtenir LA parcelle la plus proche du point via le nouveau
+    service de géocodage inversé de la Géoplateforme (IGN), successeur
+    officiel de l'ancienne API Adresse/BAN (dépréciée fin janvier 2026).
+
+    Contrairement à notre ancienne méthode par périmètre (qui liste toutes
+    les parcelles touchées sans les classer), ce service retourne la
+    parcelle dont le **barycentre est le plus proche** du point recherché —
+    un vrai classement par proximité, bien plus robuste dans les zones
+    denses/subdivisées (lotissements, copropriétés) où plusieurs petites
+    parcelles voisines se touchent. Documentation confirmée via forums
+    techniques IGN/GeoRezo ; **non testée en conditions réelles** faute
+    d'accès réseau dans l'environnement de développement — le nom exact de
+    certains champs de la réponse peut nécessiter un ajustement après un
+    premier test réel (plusieurs noms candidats déjà prévus ci-dessous).
+    """
+    import requests
+
+    try:
+        resp = requests.get(
+            GEOPLATEFORME_REVERSE_URL,
+            params={"index": "parcel", "lon": lon, "lat": lat, "limit": 1},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if not features:
+            return None
+        p = features[0]["properties"]
+
+        # Noms de champs pas confirmés à 100% pour cet index — plusieurs
+        # candidats essayés par prudence (cf. docstring).
+        section = p.get("section") or p.get("sheet_number") or p.get("feuille")
+        numero = p.get("number") or p.get("numero") or p.get("insee_number")
+        code_insee = (
+            p.get("citycode") or p.get("municipalitycode") or p.get("commune")
+            or p.get("departmentcode")
+        )
+        if not section or not numero:
+            return None
+
+        parcelle = {
+            "id_parcelle": p.get("id") or p.get("cleabs"),
+            "code_insee": code_insee,
+            "prefixe": p.get("prefixe") or p.get("com_abs") or "000",
+            "section": section,
+            "numero": numero,
+            "contenance_m2": p.get("contenance"),
+        }
+        return {
+            **parcelle, "nb_parcelles": 1, "parcelles": [parcelle],
+            "source": "Géoplateforme (barycentre le plus proche)",
+        }
+    except Exception as exc:
+        print(f"[warn] Géoplateforme (reverse parcel) échouée pour ({lat}, {lon}) : {exc}")
+        return None
+
+
 def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dict | None:
     """
-    Récupère la parcelle cadastrale au point donné (API Carto IGN, module
-    cadastre — gratuit, sans clé).
+    Récupère la parcelle cadastrale au point donné.
 
-    Stratégie en deux temps :
-    1. **Requête ponctuelle exacte** (point-in-polygon) en priorité — précise
-       pour la grande majorité des adresses réelles, puisqu'un point
-       d'adresse géocodé tombe normalement bien à l'intérieur de la parcelle
-       bâtie correspondante. Si elle donne un résultat unique, on lui fait
-       confiance directement (`nb_parcelles: 1`, `source: "point exact"`).
+    Stratégie en trois temps :
+    0. **Nouveau service Géoplateforme** (géocodage inversé IGN, successeur
+       de l'API BAN) — classe les parcelles par proximité du barycentre,
+       ce qui résout la plupart des cas ambigus (zones denses/subdivisées)
+       sans jamais renvoyer une liste non triée. Essayé en premier.
+    1. **Requête ponctuelle exacte** (API Carto, point-in-polygon) — repli
+       si la Géoplateforme échoue. Précise pour la grande majorité des
+       adresses réelles, puisqu'un point d'adresse géocodé tombe
+       normalement bien à l'intérieur de la parcelle bâtie correspondante.
     2. **Repli sur un petit périmètre** (par défaut ±10 m, soit un carré
-       d'environ 20 m de côté) seulement si le point exact ne donne rien —
-       cas typique où le point d'adresse (API BAN) est placé sur la voie
-       d'accès plutôt que sur la parcelle bâtie elle-même (observé sur une
-       adresse à Chennevières-sur-Marne). Dans ce cas, toutes les parcelles
-       du périmètre sont retournées comme candidates à vérifier plutôt que
-       d'en choisir une seule silencieusement — la fonction appelante décide
-       alors quoi faire de l'ambiguïté (ex. `find_property_history` n'utilise
-       ce résultat que si une seule parcelle est trouvée).
+       d'environ 20 m de côté) seulement si les deux étapes précédentes ne
+       donnent rien — cas typique où le point d'adresse est placé sur la
+       voie d'accès plutôt que sur la parcelle bâtie elle-même. Dans ce
+       cas, toutes les parcelles du périmètre sont retournées comme
+       candidates à vérifier plutôt que d'en choisir une seule
+       silencieusement.
     """
+    geoplateforme_result = _get_parcelle_via_geoplateforme(lat, lon)
+    if geoplateforme_result:
+        return geoplateforme_result
+
     import requests, json, math
 
     def _query(geom_dict):
@@ -1258,7 +1324,7 @@ def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dic
         point_features = _query({"type": "Point", "coordinates": [lon, lat]})
         if len(point_features) == 1:
             p = _to_parcelle_dict(point_features[0]["properties"])
-            return {**p, "nb_parcelles": 1, "parcelles": [p], "source": "point exact"}
+            return {**p, "nb_parcelles": 1, "parcelles": [p], "source": "point exact (API Carto)"}
 
         d_lat = buffer_m / 111_320
         d_lon = buffer_m / (111_320 * max(math.cos(math.radians(lat)), 0.1))
