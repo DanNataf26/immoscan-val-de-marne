@@ -121,40 +121,37 @@ Licence Ouverte v2.0 (Etalab) — réutilisation libre sous réserve de
 mentionner la source, ce que l'app fait automatiquement (colonne "source"
 dans les tableaux d'historique et de comparables).
 
-**Import manuel requis** : contrairement à geo-dvf, ces fichiers sont
-distribués via des archives ZIP sur Box.com
+**Trois formats de stockage possibles**, tous détectés automatiquement par
+l'app (le régional combiné étant recherché en premier) :
+
+1. **⭐ Régional combiné compressé (recommandé)** : un seul fichier
+   `cerema_data/cerema_dvfplus_region_{nom}.csv.gz` couvrant tous les
+   départements d'une région en une fois (ex. les 8 départements
+   d'Île-de-France en un seul fichier de ~36 Mo grâce à la compression
+   gzip, contre ~123 Mo non compressé — largement sous la limite GitHub de
+   100 Mo). L'app filtre automatiquement au département actif à la volée,
+   avec un cache mémoire pour éviter de redécompresser à chaque appel. Le
+   plus simple à gérer : un seul fichier à déposer, quel que soit le nombre
+   de départements couverts.
+2. **Un fichier par département** (`cerema_data/cerema_dvfplus_{dept}.csv`,
+   non compressé, ~15 Mo chacun) : plus de fichiers à gérer, mais chacun
+   plus petit — utile si vous ne voulez couvrir qu'un ou deux départements
+   précis plutôt que toute une région.
+3. **Upload temporaire depuis l'app** (non permanent) : dans "Options
+   avancées", déposez l'archive régionale — un bouton principal
+   **"⭐ Importer toute la région en 1 fichier compressé"** (recommandé,
+   génère le format 1 ci-dessus) est proposé, avec les options
+   département-par-département disponibles dans un menu dépliable
+   "Autres options d'import" pour les cas particuliers. Les fichiers
+   générés (dans `output/`) doivent ensuite être récupérés et déposés dans
+   `cerema_data/` pour devenir permanents (formats 1 ou 2).
+
+**Import manuel requis dans tous les cas** : contrairement à geo-dvf, ces
+fichiers sont distribués via des archives ZIP sur Box.com
 (cerema.app.box.com/v/dvfplus-opendata), sans URL directe automatisable.
-**Cerema distribue une archive par région**, chacune contenant un fichier
-CSV par département (ex. l'archive Île-de-France contient
-`dvf_plus_d75.csv`, `dvf_plus_d77.csv`, ... `dvf_plus_d95.csv`). L'app peut
-importer soit un seul département de l'archive, soit tous d'un coup.
-
-**Deux façons de l'intégrer** :
-
-1. **Intégration permanente (recommandée)** : une fois le(s) fichier(s)
-   généré(s) (via l'upload dans l'app, ou fournis directement par Claude),
-   déposez-le(s) dans un dossier `cerema_data/` à la racine du dépôt GitHub,
-   nommé(s) `cerema_dvfplus_{dept}.csv` (ex. `cerema_data/cerema_dvfplus_94.csv`).
-   Une fois traité et filtré, chaque fichier ne pèse qu'une quinzaine de Mo
-   par département (largement sous la limite GitHub de 100 Mo) — l'app les
-   détecte alors automatiquement à chaque démarrage, **sans jamais avoir
-   besoin de les réimporter**, même après suppression/redéploiement de l'app
-   (contrairement à un import via upload, qui utilise un stockage éphémère
-   perdu à chaque redémarrage).
-2. **Upload temporaire depuis l'app** : dans "Options avancées" (uniquement
-   affiché si aucun fichier intégré n'existe déjà pour le département actif) :
-   téléchargez l'archive de votre région sur le lien Box ci-dessus, puis
-   déposez-la dans l'app. Deux boutons sont alors proposés :
-   - **"Importer seulement le {dept}"** : traite uniquement le département
-     actuellement sélectionné dans la barre latérale.
-   - **"Importer toute la région"** : détecte et traite automatiquement
-     *tous* les départements présents dans l'archive en une seule fois
-     (chacun mis en cache séparément, un fichier par département — l'app
-     reste structurée département par département en interne).
-
-   Les résultats (dans `output/cerema_dvfplus_{dept}.csv`, un par
-   département) peuvent ensuite être récupérés et déposés dans
-   `cerema_data/` pour les rendre permanents (méthode 1).
+Cerema distribue une archive par région, chacune contenant un fichier CSV
+par département (ex. l'archive Île-de-France contient `dvf_plus_d75.csv`,
+`dvf_plus_d77.csv`, ... `dvf_plus_d95.csv`).
 
 **Différences avec geo-dvf, importantes à connaître** :
 - **Pas de champ adresse** (numéro + rue) dans cette source — seulement des

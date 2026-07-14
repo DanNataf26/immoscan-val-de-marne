@@ -195,15 +195,26 @@ with st.sidebar.expander("Options avancées"):
     st.divider()
     st.markdown("**Historique complémentaire 2014-2020 (Cerema DVF+)**")
 
-    bundled_exists = (core.CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv").exists()
+    regional_files = sorted(core.CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz"))
+    bundled_dept_exists = (core.CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv").exists()
     uploaded_exists = (core.OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv").exists()
+    bundled_exists = bool(regional_files) or bundled_dept_exists
 
     if bundled_exists:
-        st.success(
-            f"✅ Historique Cerema DVF+ intégré en permanence au dépôt pour le "
-            f"{dept} (fichier `cerema_data/cerema_dvfplus_{dept}.csv`) — "
-            "survit aux redémarrages, pas besoin de le réimporter."
-        )
+        if regional_files:
+            noms = ", ".join(f.name for f in regional_files)
+            st.success(
+                f"✅ Historique Cerema DVF+ intégré en permanence au dépôt via "
+                f"un fichier régional ({noms}) — couvre potentiellement "
+                "plusieurs départements, filtré automatiquement pour le "
+                f"{dept}. Survit aux redémarrages."
+            )
+        else:
+            st.success(
+                f"✅ Historique Cerema DVF+ intégré en permanence au dépôt pour le "
+                f"{dept} (fichier `cerema_data/cerema_dvfplus_{dept}.csv`) — "
+                "survit aux redémarrages, pas besoin de le réimporter."
+            )
     else:
         st.caption(
             "Source : Cerema, DVF+ open-data (Licence Ouverte v2.0, Etalab) — "
@@ -215,11 +226,13 @@ with st.sidebar.expander("Options avancées"):
         )
         st.info(
             "💡 **Astuce pour éviter de réimporter à chaque redéploiement** : "
-            "une fois importé ci-dessous, téléchargez le(s) fichier(s) généré(s) "
-            "(`output/cerema_dvfplus_{dept}.csv`) et déposez-le(s) directement "
-            "dans un dossier `cerema_data/` de votre dépôt GitHub — l'app les "
-            "détecte alors automatiquement de façon permanente, sans jamais "
-            "avoir besoin de les réimporter."
+            "une fois importé ci-dessous, téléchargez le fichier généré dans "
+            "`output/` et déposez-le directement dans un dossier "
+            "`cerema_data/` de votre dépôt GitHub — l'app le détecte alors "
+            "automatiquement de façon permanente, sans jamais avoir besoin "
+            "de le réimporter. **L'option combinée (recommandée) ne "
+            "génère qu'un seul fichier compressé pour toute la région**, "
+            "plus simple à gérer qu'un fichier par département."
         )
         cerema_zip = st.file_uploader(
             "Archive ZIP Cerema DVF+", type=["zip"], key="cerema_zip_upload",
@@ -243,27 +256,51 @@ with st.sidebar.expander("Options avancées"):
                     f"cette archive : {', '.join(depts_detectes)}."
                 )
 
-            col_dept, col_region = st.columns(2)
-            with col_dept:
-                if st.button(f"Importer seulement le {dept}", key="cerema_import_button"):
-                    with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
+            region_name = st.text_input(
+                "Nom court pour cette région (pour nommer le fichier)",
+                value="idf", key="cerema_region_name",
+                help="Utilisé dans le nom du fichier généré : "
+                     "cerema_dvfplus_region_{nom}.csv.gz",
+            )
+
+            if st.button(
+                "⭐ Importer toute la région en 1 fichier compressé (recommandé)",
+                key="cerema_import_region_combined_button", type="primary",
+                use_container_width=True,
+            ):
+                status_box = st.status("Import régional combiné en cours...", expanded=True)
+                try:
+                    msg = core.import_cerema_dvfplus_region_combined(
+                        str(tmp_path), region_name=region_name, progress_callback=status_box.write
+                    )
+                    status_box.update(label="✅ Import régional combiné terminé", state="complete")
+                    st.success(msg)
+                except SystemExit as e:
+                    status_box.update(label="Erreur", state="error")
+                    st.error(str(e))
+
+            with st.expander("Autres options d'import (un fichier par département)"):
+                col_dept, col_region = st.columns(2)
+                with col_dept:
+                    if st.button(f"Importer seulement le {dept}", key="cerema_import_button"):
+                        with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
+                            try:
+                                msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                                st.success(msg)
+                            except SystemExit as e:
+                                st.error(str(e))
+                with col_region:
+                    if st.button("Importer toute la région (fichiers séparés)", key="cerema_import_region_button"):
+                        status_box = st.status("Import de la région en cours...", expanded=True)
                         try:
-                            msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                            msg = core.import_cerema_dvfplus_region(
+                                str(tmp_path), progress_callback=status_box.write
+                            )
+                            status_box.update(label="✅ Import régional terminé", state="complete")
                             st.success(msg)
                         except SystemExit as e:
+                            status_box.update(label="Erreur", state="error")
                             st.error(str(e))
-            with col_region:
-                if st.button("Importer toute la région", key="cerema_import_region_button"):
-                    status_box = st.status("Import de la région en cours...", expanded=True)
-                    try:
-                        msg = core.import_cerema_dvfplus_region(
-                            str(tmp_path), progress_callback=status_box.write
-                        )
-                        status_box.update(label="✅ Import régional terminé", state="complete")
-                        st.success(msg)
-                    except SystemExit as e:
-                        status_box.update(label="Erreur", state="error")
-                        st.error(str(e))
             tmp_path.unlink(missing_ok=True)
 
         if uploaded_exists:

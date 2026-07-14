@@ -605,47 +605,90 @@ def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
     )
 
 
-def import_cerema_dvfplus_region(zip_path: str, depts: list[str] | None = None,
-                                  progress_callback=None) -> str:
+def import_cerema_dvfplus_region_combined(zip_path: str, region_name: str,
+                                           depts: list[str] | None = None,
+                                           progress_callback=None) -> str:
     """
     Importe les données Cerema DVF+ pour tous les départements d'une archive
-    régionale en une fois, et met chacun en cache séparément (un fichier par
-    département, pour rester cohérent avec le reste de l'app qui fonctionne
-    département par département). Retourne un message de résumé global.
+    régionale et les combine en UN SEUL fichier compressé (gzip), plutôt
+    qu'un fichier par département — recommandé pour limiter le nombre de
+    fichiers à gérer sur GitHub. La compression gzip réduit la taille
+    d'environ 3-4x (ex. ~122 Mo → ~36 Mo pour l'Île-de-France), sans
+    dépendance supplémentaire (gzip est natif à pandas/Python).
+
+    `region_name` sert à nommer le fichier de sortie
+    (`cerema_dvfplus_region_{region_name}.csv.gz`) — utilisez un nom court
+    et stable (ex. "idf" pour Île-de-France).
     """
     resultats = load_cerema_dvfplus_region(zip_path, depts, progress_callback=progress_callback)
+    if not resultats:
+        raise SystemExit("Aucun département n'a pu être importé depuis cette archive.")
+
+    if progress_callback:
+        progress_callback("Combinaison de tous les départements en un seul fichier...")
+    combined = pd.concat(resultats.values(), ignore_index=True)
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = OUTPUT_DIR / f"cerema_dvfplus_region_{region_name}.csv.gz"
 
-    lignes_resume = []
-    for dept, df in resultats.items():
-        cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
-        df.to_csv(cache_path, index=False)
-        annees = f"{df['annee'].min()}-{df['annee'].max()}" if not df.empty else "aucune"
-        lignes_resume.append(f"  • {dept} : {len(df)} transactions ({annees})")
-        if progress_callback:
-            progress_callback(f"✅ {dept} : {len(df)} transactions importées.")
+    if progress_callback:
+        progress_callback("Compression du fichier régional (gzip)...")
+    combined.to_csv(cache_path, index=False, compression="gzip")
 
-    total = sum(len(df) for df in resultats.values())
+    taille_mo = cache_path.stat().st_size / 1_000_000
+    lignes_resume = [
+        f"  • {dept} : {len(df)} transactions ({df['annee'].min()}-{df['annee'].max()})"
+        if not df.empty else f"  • {dept} : aucune transaction"
+        for dept, df in resultats.items()
+    ]
     return (
-        f"{total} transactions Cerema DVF+ importées au total pour "
-        f"{len(resultats)} département(s) :\n" + "\n".join(lignes_resume) +
-        "\n\nSource : Cerema, DVF+ open-data, Licence Ouverte v2.0 (Etalab)."
+        f"{len(combined)} transactions Cerema DVF+ importées et combinées "
+        f"pour {len(resultats)} département(s) en un seul fichier compressé "
+        f"({taille_mo:.0f} Mo) :\n" + "\n".join(lignes_resume) +
+        f"\n\nFichier généré : output/cerema_dvfplus_region_{region_name}.csv.gz "
+        "— à déposer dans cerema_data/ pour le rendre permanent.\n"
+        "Source : Cerema, DVF+ open-data, Licence Ouverte v2.0 (Etalab)."
     )
 
 
 
 CEREMA_BUNDLED_DIR = Path(__file__).parent / "cerema_data"
 
+_regional_cache_memoire: dict[str, pd.DataFrame] = {}
+
+
+def _load_regional_file_cached(path: Path) -> pd.DataFrame:
+    """Charge un fichier régional Cerema compressé, avec un cache mémoire
+    (process Python) pour éviter de le redécompresser à chaque appel —
+    la décompression d'un fichier de plusieurs dizaines de Mo prend une
+    à deux secondes, non négligeable si répété à chaque interaction."""
+    key = str(path)
+    if key not in _regional_cache_memoire:
+        _regional_cache_memoire[key] = pd.read_csv(path)
+    return _regional_cache_memoire[key]
+
 
 def load_cerema_cache(dept: str) -> pd.DataFrame | None:
     """
-    Charge les données Cerema DVF+ pour un département. Cherche d'abord un
-    fichier intégré au dépôt (dossier `cerema_data/`, committé une fois pour
-    toutes sur GitHub — survit aux redéploiements et reboots), puis, à
-    défaut, le cache généré par un import manuel via l'upload dans l'app
-    (perdu à chaque redéploiement, car stocké dans le dossier de travail
-    éphémère `output/`).
+    Charge les données Cerema DVF+ pour un département. Cherche, dans cet
+    ordre :
+    1. Un fichier régional intégré au dépôt (`cerema_data/cerema_dvfplus_region_*.csv.gz`,
+       compressé, couvrant plusieurs départements — recommandé pour limiter
+       le nombre de fichiers) — filtré au département demandé.
+    2. Un fichier par département intégré au dépôt
+       (`cerema_data/cerema_dvfplus_{dept}.csv`, non compressé).
+    3. À défaut, le cache généré par un import manuel via l'upload dans
+       l'app (perdu à chaque redéploiement, stocké dans `output/`).
+
+    Les fichiers intégrés au dépôt (1 et 2) survivent aux redéploiements et
+    reboots ; le cache d'upload (3) est éphémère.
     """
+    for regional_path in sorted(CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz")):
+        df_region = _load_regional_file_cached(regional_path)
+        df_dept = df_region[df_region["code_commune"].astype(str).str.startswith(dept)]
+        if not df_dept.empty:
+            return df_dept.reset_index(drop=True)
+
     bundled_path = CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv"
     if bundled_path.exists():
         return pd.read_csv(bundled_path)
