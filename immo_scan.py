@@ -1218,18 +1218,24 @@ def get_parcelle_by_identifiants(code_insee: str, section: str, numero: str) -> 
 
 def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dict | None:
     """
-    Récupère les parcelles cadastrales à proximité immédiate du point donné
-    (API Carto IGN, module cadastre — gratuit, sans clé).
+    Récupère la parcelle cadastrale au point donné (API Carto IGN, module
+    cadastre — gratuit, sans clé).
 
-    IMPORTANT : on interroge toujours un petit périmètre (par défaut 10 m)
-    plutôt qu'un point exact. Un point d'adresse (API BAN) est souvent placé
-    sur la voie d'accès plutôt qu'à l'intérieur de la parcelle bâtie réelle —
-    une requête ponctuelle peut alors renvoyer avec confiance la mauvaise
-    parcelle (ex. celle de la rue elle-même) sans jamais déclencher de repli,
-    puisqu'elle obtient bien UN résultat, juste le mauvais. On retourne donc
-    toutes les parcelles touchées par ce petit périmètre, pour que l'app
-    puisse les présenter comme candidates à vérifier plutôt que d'en choisir
-    une seule silencieusement.
+    Stratégie en deux temps :
+    1. **Requête ponctuelle exacte** (point-in-polygon) en priorité — précise
+       pour la grande majorité des adresses réelles, puisqu'un point
+       d'adresse géocodé tombe normalement bien à l'intérieur de la parcelle
+       bâtie correspondante. Si elle donne un résultat unique, on lui fait
+       confiance directement (`nb_parcelles: 1`, `source: "point exact"`).
+    2. **Repli sur un petit périmètre** (par défaut ±10 m, soit un carré
+       d'environ 20 m de côté) seulement si le point exact ne donne rien —
+       cas typique où le point d'adresse (API BAN) est placé sur la voie
+       d'accès plutôt que sur la parcelle bâtie elle-même (observé sur une
+       adresse à Chennevières-sur-Marne). Dans ce cas, toutes les parcelles
+       du périmètre sont retournées comme candidates à vérifier plutôt que
+       d'en choisir une seule silencieusement — la fonction appelante décide
+       alors quoi faire de l'ambiguïté (ex. `find_property_history` n'utilise
+       ce résultat que si une seule parcelle est trouvée).
     """
     import requests, json, math
 
@@ -1238,7 +1244,22 @@ def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dic
         resp.raise_for_status()
         return resp.json().get("features", [])
 
+    def _to_parcelle_dict(props):
+        return {
+            "id_parcelle": props.get("id"),
+            "code_insee": props.get("commune"),
+            "prefixe": props.get("prefixe"),
+            "section": props.get("section"),
+            "numero": props.get("numero"),
+            "contenance_m2": props.get("contenance"),
+        }
+
     try:
+        point_features = _query({"type": "Point", "coordinates": [lon, lat]})
+        if len(point_features) == 1:
+            p = _to_parcelle_dict(point_features[0]["properties"])
+            return {**p, "nb_parcelles": 1, "parcelles": [p], "source": "point exact"}
+
         d_lat = buffer_m / 111_320
         d_lon = buffer_m / (111_320 * max(math.cos(math.radians(lat)), 0.1))
         square = [
@@ -1256,14 +1277,7 @@ def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dic
             p = f["properties"]
             key = (p.get("section"), p.get("numero"))
             if key not in vues:
-                vues[key] = {
-                    "id_parcelle": p.get("id"),
-                    "code_insee": p.get("commune"),
-                    "prefixe": p.get("prefixe"),
-                    "section": p.get("section"),
-                    "numero": p.get("numero"),
-                    "contenance_m2": p.get("contenance"),
-                }
+                vues[key] = _to_parcelle_dict(p)
         parcelles = list(vues.values())
         contenances = [p["contenance_m2"] for p in parcelles if p["contenance_m2"]]
 
@@ -1276,6 +1290,7 @@ def get_parcelle_cadastrale(lat: float, lon: float, buffer_m: float = 10) -> dic
             "contenance_m2": sum(contenances) if contenances else None,
             "nb_parcelles": len(parcelles),
             "parcelles": parcelles,
+            "source": "périmètre (point exact ambigu ou vide)",
         }
     except Exception as exc:
         print(f"[warn] Cadastre échoué pour ({lat}, {lon}) : {exc}")
