@@ -865,9 +865,15 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     proches = combined[combined["distance_m"] <= radius_m].sort_values("distance_m")
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
-    # adresse_numero/adresse_nom_voie n'existent pas côté Cerema — on les
-    # ajoute seulement si présentes (source geo-dvf).
+    # adresse_numero/adresse_nom_voie n'existent pas côté Cerema (source sans
+    # champ adresse, seulement des identifiants de parcelle — voir README) :
+    # on remplace le vide par un texte explicite plutôt qu'un "None" qui
+    # ressemble à une erreur.
     if "adresse_numero" in proches.columns:
+        proches = proches.copy()
+        proches["adresse_numero"] = proches["adresse_numero"].astype(object)
+        proches.loc[proches["source"] == "Cerema DVF+", "adresse_numero"] = "n/d"
+        proches.loc[proches["source"] == "Cerema DVF+", "adresse_nom_voie"] = "(adresse non disponible pour cette source)"
         cols = ["adresse_numero", "adresse_nom_voie"] + cols
     return proches[cols].head(max_results)
 
