@@ -871,6 +871,56 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     return proches[cols].head(max_results), resume
 
 
+def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | None = None,
+                           radius_m: float = 100, since_years: int = 5,
+                           max_results: int = 15, include_cerema: bool = True,
+                           tri: str = "distance", cible_min: int = 15) -> dict:
+    """
+    Comme `find_comparables`, mais élargit automatiquement la recherche si
+    le nombre de résultats trouvés est inférieur à `cible_min` : d'abord le
+    rayon (jusqu'à 1000 m), puis si toujours insuffisant, la période
+    (jusqu'à 15 ans), en gardant le rayon maximal atteint. S'arrête dès que
+    la cible est atteinte ou que les deux limites (1000m/15 ans) sont
+    épuisées — nombre de tentatives volontairement limité (4 paliers de
+    rayon, 3 paliers d'années) pour rester rapide.
+
+    Retourne un dict : {df, resume, radius_final, since_years_final, elargi}
+    — `elargi` indique si les paramètres initiaux ont dû être dépassés,
+    pour que l'app puisse en informer clairement l'utilisateur.
+    """
+    paliers_radius = sorted(set([radius_m, 250, 500, 1000]))
+    paliers_radius = [r for r in paliers_radius if r >= radius_m]
+    paliers_annees = sorted(set([since_years, 10, 15]))
+    paliers_annees = [a for a in paliers_annees if a >= since_years]
+
+    radius_final = radius_m
+    df, resume = find_comparables(dept, lat, lon, type_local, radius_m, max_results,
+                                    since_years, include_cerema, tri)
+
+    if resume["total"] < cible_min:
+        for r in paliers_radius[1:]:
+            df, resume = find_comparables(dept, lat, lon, type_local, r, max_results,
+                                            since_years, include_cerema, tri)
+            radius_final = r
+            if resume["total"] >= cible_min:
+                break
+
+    since_years_final = since_years
+    if resume["total"] < cible_min:
+        for a in paliers_annees[1:]:
+            df, resume = find_comparables(dept, lat, lon, type_local, radius_final, max_results,
+                                            a, include_cerema, tri)
+            since_years_final = a
+            if resume["total"] >= cible_min:
+                break
+
+    elargi = (radius_final != radius_m) or (since_years_final != since_years)
+    return {
+        "df": df, "resume": resume, "radius_final": radius_final,
+        "since_years_final": since_years_final, "elargi": elargi,
+    }
+
+
 
 
 def _parse_address_number_street(address: str) -> tuple[str, str]:

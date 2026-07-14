@@ -508,33 +508,33 @@ with tab_recherche:
                         )
                         tri_comparables = "date" if tri_label.startswith("Date") else "distance"
 
-                    comparables, resume_comparables = core.find_comparables(
+                    resultat_auto = core.find_comparables_auto(
                         active_dept, geo["latitude"], geo["longitude"],
                         radius_m=radius_comparables, since_years=since_years,
                         max_results=max_comparables, tri=tri_comparables,
+                        cible_min=max_comparables,
                     )
+                    comparables = resultat_auto["df"]
+                    resume_comparables = resultat_auto["resume"]
+                    radius_utilise = resultat_auto["radius_final"]
+                    since_years_utilise = resultat_auto["since_years_final"]
 
                     if comparables.empty:
                         comparables_filtres = comparables
                     else:
                         st.divider()
                         st.markdown("**Filtrer le tableau affiché ci-dessous**")
+                        st.caption("Laissez un champ vide pour ne pas filtrer dessus (tout est affiché par défaut).")
                         fc1, fc2, fc3 = st.columns(3)
                         with fc1:
                             types_dispo_filtre = sorted(comparables["type_local"].dropna().unique())
-                            types_choisis = st.multiselect(
-                                "Type de bien", types_dispo_filtre, default=types_dispo_filtre,
-                            )
+                            types_choisis = st.multiselect("Type de bien", types_dispo_filtre)
                         with fc2:
                             communes_dispo_filtre = sorted(comparables["nom_commune"].dropna().unique())
-                            communes_choisies = st.multiselect(
-                                "Commune", communes_dispo_filtre, default=communes_dispo_filtre,
-                            )
+                            communes_choisies = st.multiselect("Commune", communes_dispo_filtre)
                         with fc3:
                             sources_dispo_filtre = sorted(comparables["source"].dropna().unique())
-                            sources_choisies = st.multiselect(
-                                "Source", sources_dispo_filtre, default=sources_dispo_filtre,
-                            )
+                            sources_choisies = st.multiselect("Source", sources_dispo_filtre)
                         prix_min = float(comparables["prix_m2"].min())
                         prix_max = float(comparables["prix_m2"].max())
                         if prix_max > prix_min:
@@ -544,20 +544,32 @@ with tab_recherche:
                         else:
                             plage_prix = (prix_min, prix_max)
 
-                        comparables_filtres = comparables[
-                            comparables["type_local"].isin(types_choisis)
-                            & comparables["nom_commune"].isin(communes_choisies)
-                            & comparables["source"].isin(sources_choisies)
-                            & comparables["prix_m2"].between(plage_prix[0], plage_prix[1])
-                        ]
+                        masque = comparables["prix_m2"].between(plage_prix[0], plage_prix[1])
+                        if types_choisis:
+                            masque &= comparables["type_local"].isin(types_choisis)
+                        if communes_choisies:
+                            masque &= comparables["nom_commune"].isin(communes_choisies)
+                        if sources_choisies:
+                            masque &= comparables["source"].isin(sources_choisies)
+                        comparables_filtres = comparables[masque]
 
                 with map_placeholder:
                     st.subheader("Vues du bien")
-                    render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_comparables)
+                    render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_utilise)
 
                 if comparables.empty:
-                    st.caption("Aucune transaction DVF comparable dans ce rayon/cette période.")
+                    st.caption(
+                        "Aucune transaction DVF comparable trouvée, même après "
+                        "élargissement automatique jusqu'à 1000 m / 15 ans."
+                    )
                 else:
+                    if resultat_auto["elargi"]:
+                        st.info(
+                            f"🔍 Recherche élargie automatiquement à {radius_utilise:.0f} m "
+                            f"/ {since_years_utilise} ans (au lieu de {radius_comparables:.0f} m "
+                            f"/ {since_years} ans) car moins de {max_comparables} biens "
+                            "comparables avaient été trouvés avec les réglages initiaux."
+                        )
                     total = resume_comparables["total"]
                     par_source = resume_comparables["total_par_source"]
                     st.caption(
@@ -567,21 +579,26 @@ with tab_recherche:
                         + " · ".join(f"{v} via {k}" for k, v in par_source.items())
                     )
 
-                    prix_par_type = resume_comparables["prix_m2_moyen_par_type"]
-                    if prix_par_type:
-                        cols_prix = st.columns(len(prix_par_type))
-                        for col, (type_bien, prix_moy) in zip(cols_prix, prix_par_type.items()):
-                            col.metric(f"€/m² moyen — {type_bien}", f"{prix_moy:,.0f} €")
-                        if "Local commercial" not in prix_par_type and "Local industriel. commercial ou assimilé" not in prix_par_type:
-                            st.caption(
-                                "ℹ️ Les locaux commerciaux ne sont pas suivis par cette "
-                                "app pour l'instant (seuls maisons, appartements et "
-                                "immeubles en bloc sont traités)."
-                            )
-
                     if comparables_filtres.empty:
                         st.caption("Aucun résultat ne correspond aux filtres sélectionnés.")
                     else:
+                        # Prix moyen par type calculé sur les données FILTRÉES (pas
+                        # sur l'ensemble complet) pour bien réagir aux filtres choisis.
+                        prix_par_type = (
+                            comparables_filtres.groupby("type_local")["prix_m2"]
+                            .mean().round(0).to_dict()
+                        )
+                        if prix_par_type:
+                            cols_prix = st.columns(len(prix_par_type))
+                            for col, (type_bien, prix_moy) in zip(cols_prix, prix_par_type.items()):
+                                col.metric(f"€/m² moyen — {type_bien}", f"{prix_moy:,.0f} €")
+                            if "Local commercial" not in prix_par_type and "Local industriel. commercial ou assimilé" not in prix_par_type:
+                                st.caption(
+                                    "ℹ️ Les locaux commerciaux ne sont pas suivis par cette "
+                                    "app pour l'instant (seuls maisons, appartements et "
+                                    "immeubles en bloc sont traités)."
+                                )
+
                         st.dataframe(comparables_filtres, use_container_width=True)
                         if len(comparables_filtres) < len(comparables):
                             st.caption(
