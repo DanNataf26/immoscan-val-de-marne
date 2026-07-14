@@ -416,7 +416,7 @@ with tab_recherche:
             st.success(f"📍 Adresse active : {geo['label']}")
         with col_reset:
             if st.button("🔄 Nouvelle recherche"):
-                for k in ("adresse_confirmee",):
+                for k in ("adresse_confirmee", "history_cache_key", "history_cache_result"):
                     st.session_state.pop(k, None)
                 st.rerun()
 
