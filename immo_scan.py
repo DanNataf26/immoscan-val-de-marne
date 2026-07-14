@@ -35,11 +35,9 @@ Limites connues (prototype v0.1, à valider avant tout usage commercial) :
   - Les données DVF ont un décalage de quelques mois avec le marché actuel.
 """
 
-import argparse
 import gzip
 import io
 import json
-import os
 import sys
 import unicodedata
 from pathlib import Path
@@ -63,23 +61,6 @@ VAL_DE_MARNE_HINT = (
 )
 
 TYPES_RETENUS = ["Maison", "Appartement"]  # types_local bruts DVF exploités
-
-
-def department_from_geo(code_postal: str | None = None, code_insee: str | None = None) -> str | None:
-    """Déduit le département français à partir du code postal ou INSEE."""
-    code_insee = str(code_insee or "").strip()
-    code_postal = str(code_postal or "").strip()
-    if code_insee.startswith(("2A", "2B")):
-        return code_insee[:2]
-    if len(code_insee) >= 3 and code_insee[:3] in {"971", "972", "973", "974", "976"}:
-        return code_insee[:3]
-    if len(code_postal) >= 3 and code_postal[:3] in {"971", "972", "973", "974", "976"}:
-        return code_postal[:3]
-    if len(code_postal) >= 2:
-        return code_postal[:2]
-    if len(code_insee) >= 2:
-        return code_insee[:2]
-    return None
 
 
 def _normalize_text(value) -> str:
@@ -137,7 +118,6 @@ COLS_UTILES = [
 ]
 
 # API publiques utilisées pour l'enrichissement par adresse
-BAN_API_URL = "https://api-adresse.data.gouv.fr/search/"
 ADEME_DPE_API_URL = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines"
 IGN_CADASTRE_URL = "https://apicarto.ign.fr/api/cadastre/parcelle"
 IGN_GPU_ZONE_URBA_URL = "https://apicarto.ign.fr/api/gpu/zone-urba"
@@ -253,9 +233,42 @@ def save_meta(dept: str, years: list[int]) -> None:
     meta_path(dept).write_text(json.dumps({"years": sorted(years)}))
 
 
+REFERENCE_BUNDLED_DIR = Path(__file__).parent / "reference_data"
+
+
+def _seed_from_bundled_reference(dept: str) -> bool:
+    """
+    Si une référence pré-construite existe dans `reference_data/` pour ce
+    département (committée une fois pour toutes sur GitHub, comme pour
+    Cerema DVF+), la copie dans le cache de travail éphémère (`output/`)
+    pour éviter un téléchargement + reconstruction complète à chaque
+    redémarrage à froid de l'app (cause principale des lenteurs/échecs
+    occasionnels au démarrage — le cache de travail ne survit pas aux mises
+    en veille de Streamlit Cloud). Retourne True si un fichier a été trouvé
+    et copié.
+    """
+    import shutil
+
+    ref_src = REFERENCE_BUNDLED_DIR / f"reference_{dept}.csv"
+    if not ref_src.exists():
+        return False
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for name in (f"reference_{dept}.csv", f"tendance_{dept}.csv",
+                 f"transactions_nettoyees_{dept}.csv", f"meta_{dept}.json"):
+        src = REFERENCE_BUNDLED_DIR / name
+        if src.exists():
+            shutil.copy(src, OUTPUT_DIR / name)
+    return True
+
+
 def reference_is_up_to_date(dept: str, years: list[int]) -> bool:
     """Vrai si une référence existe déjà pour ce département ET couvre bien
-    exactement les années actuellement sélectionnées."""
+    exactement les années actuellement sélectionnées. Tente d'abord un
+    amorçage depuis un fichier intégré au dépôt (voir
+    `_seed_from_bundled_reference`) si le cache de travail est vide."""
+    if not (OUTPUT_DIR / f"reference_{dept}.csv").exists():
+        _seed_from_bundled_reference(dept)
     if not (OUTPUT_DIR / f"reference_{dept}.csv").exists():
         return False
     meta = load_meta(dept)
@@ -321,72 +334,13 @@ def run_reference(dept: str, years: list[int]) -> None:
 
 
 # ----------------------------------------------------------------------------
-# 3bis. Enrichissement par adresse : géocodage, DPE, comparables à proximité
+# 3bis. Enrichissement par adresse : DPE, comparables à proximité
 # ----------------------------------------------------------------------------
-
-def geocode_suggestions(address: str, limit: int = 5) -> list[dict]:
-    """
-    Retourne jusqu'à `limit` suggestions d'adresses via l'API Adresse (BAN),
-    pour une autocomplétion pendant la frappe. Renvoie une liste vide si
-    l'adresse est trop courte ou si l'API échoue (jamais d'exception levée).
-    """
-    import requests
-    if not address or len(address.strip()) < 3:
-        return []
-    try:
-        resp = requests.get(BAN_API_URL, params={"q": address, "limit": limit}, timeout=8)
-        resp.raise_for_status()
-        suggestions = []
-        for f in resp.json().get("features", []):
-            props = f["properties"]
-            lon, lat = f["geometry"]["coordinates"]
-            suggestions.append({
-                "label": props.get("label"),
-                "commune": props.get("city"),
-                "code_insee": props.get("citycode"),
-                "code_postal": props.get("postcode"),
-                "score": props.get("score"),
-                "longitude": lon,
-                "latitude": lat,
-                "departement": department_from_geo(props.get("postcode"), props.get("citycode")),
-            })
-        return suggestions
-    except Exception as exc:
-        print(f"[warn] Suggestions échouées pour '{address}' : {exc}")
-        return []
-
-
-def geocode_address(address: str) -> dict | None:
-    """
-    Géocode une adresse via l'API Adresse du gouvernement (BAN), gratuite et
-    sans clé. Retourne un dict avec label, commune, code_insee, code_postal,
-    latitude, longitude — ou None si l'adresse n'est pas reconnue.
-    """
-    import requests
-    try:
-        resp = requests.get(BAN_API_URL, params={"q": address, "limit": 1}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        features = data.get("features", [])
-        if not features:
-            return None
-        f = features[0]
-        props = f["properties"]
-        lon, lat = f["geometry"]["coordinates"]
-        return {
-            "label": props.get("label"),
-            "commune": props.get("city"),
-            "code_insee": props.get("citycode"),
-            "code_postal": props.get("postcode"),
-            "departement": department_from_geo(props.get("postcode"), props.get("citycode")),
-            "score": props.get("score"),
-            "longitude": lon,
-            "latitude": lat,
-        }
-    except Exception as exc:
-        print(f"[warn] Géocodage échoué pour '{address}' : {exc}")
-        return None
-
+# NB : le géocodage (adresse -> coordonnées) se fait désormais entièrement
+# côté navigateur, dans le composant st_address_search/index.html (appel
+# direct à l'API Adresse du gouvernement en JavaScript). Les anciennes
+# fonctions Python géocode_suggestions()/geocode_address() ont été retirées
+# car devenues inutiles — elles n'étaient plus appelées nulle part.
 
 def haversine_m(lat1, lon1, lat2, lon2):
     """Distance en mètres entre deux points GPS (formule de Haversine)."""
@@ -1508,90 +1462,3 @@ def score_property(commune: str, type_local: str, surface: float, prix: float,
         "nb_transactions_reference": nb_transac,
         "diagnostic": label,
     }
-
-
-def run_score(args) -> None:
-    result = score_property(args.commune, args.type, args.surface, args.prix,
-                             dept=args.dept)
-    for k, v in result.items():
-        print(f"  {k:28s}: {v}")
-
-
-# ----------------------------------------------------------------------------
-# 5. Traitement en lot d'une liste d'annonces (CSV)
-# ----------------------------------------------------------------------------
-
-def run_batch(args) -> None:
-    """
-    Attend un CSV en entrée avec (a minima) les colonnes :
-      adresse, commune, type_local, surface, prix
-    (type_local doit valoir 'Maison' ou 'Appartement')
-    Produit un CSV trié par écart croissant (les plus sous-évalués en tête).
-    """
-    listings = pd.read_csv(args.input)
-    required = {"commune", "type_local", "surface", "prix"}
-    missing = required - set(listings.columns)
-    if missing:
-        raise SystemExit(f"Colonnes manquantes dans {args.input} : {missing}")
-
-    results = []
-    for _, r in listings.iterrows():
-        res = score_property(r["commune"], r["type_local"], r["surface"], r["prix"],
-                              dept=args.dept)
-        res["adresse"] = r.get("adresse", "")
-        results.append(res)
-
-    out = pd.DataFrame(results)
-    if "ecart_pct" in out.columns:
-        out = out.sort_values("ecart_pct")
-    out_path = OUTPUT_DIR / "opportunites_scorees.csv"
-    out.to_csv(out_path, index=False)
-    print(f"[ok] Résultats triés (sous-évalués en premier) : {out_path}")
-    print(out.head(15).to_string(index=False))
-
-
-# ----------------------------------------------------------------------------
-# CLI
-# ----------------------------------------------------------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="ImmoScan Val-de-Marne — prototype")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p_dl = sub.add_parser("download", help="Télécharger les données DVF")
-    p_dl.add_argument("--dept", default="94")
-    p_dl.add_argument("--years", nargs="+", type=int,
-                       default=[2021, 2022, 2023, 2024, 2025])
-    p_dl.add_argument("--force", action="store_true")
-
-    p_ref = sub.add_parser("reference", help="Construire la référence prix/m²")
-    p_ref.add_argument("--dept", default="94")
-    p_ref.add_argument("--years", nargs="+", type=int,
-                        default=[2021, 2022, 2023, 2024, 2025])
-
-    p_score = sub.add_parser("score", help="Scorer un bien précis")
-    p_score.add_argument("--commune", required=True)
-    p_score.add_argument("--type", required=True, choices=TYPES_RETENUS +
-                          ["Immeuble (vente en bloc, estimé)"])
-    p_score.add_argument("--surface", required=True, type=float)
-    p_score.add_argument("--prix", required=True, type=float)
-    p_score.add_argument("--dept", default="94")
-
-    p_batch = sub.add_parser("batch", help="Scorer une liste d'annonces (CSV)")
-    p_batch.add_argument("--input", required=True)
-    p_batch.add_argument("--dept", default="94")
-
-    args = parser.parse_args()
-
-    if args.command == "download":
-        download(args.dept, args.years, force=args.force)
-    elif args.command == "reference":
-        run_reference(args.dept, args.years)
-    elif args.command == "score":
-        run_score(args)
-    elif args.command == "batch":
-        run_batch(args)
-
-
-if __name__ == "__main__":
-    main()

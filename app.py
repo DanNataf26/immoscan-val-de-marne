@@ -332,7 +332,34 @@ if force_refresh:
             status_box.update(label="Erreur", state="error")
             st.sidebar.error(str(e))
 elif core.reference_is_up_to_date(dept, annees):
-    st.sidebar.success(f"✅ Référence à jour pour le {dept} ({', '.join(map(str, sorted(annees)))})")
+    reference_bundled = (core.REFERENCE_BUNDLED_DIR / f"reference_{dept}.csv").exists()
+    if reference_bundled:
+        st.sidebar.success(
+            f"✅ Référence à jour pour le {dept} — intégrée en permanence au "
+            "dépôt, pas de nouveau téléchargement au prochain démarrage."
+        )
+    else:
+        st.sidebar.warning(
+            f"⚠️ Référence à jour pour le {dept} pour cette session, mais "
+            "**pas encore permanente** — sera reconstruite depuis zéro au "
+            "prochain redémarrage à froid de l'app (cause principale des "
+            "lenteurs). Voir ci-dessous pour la rendre permanente."
+        )
+        with st.sidebar.expander("💾 Rendre cette référence permanente"):
+            st.caption(
+                "Téléchargez ces 3 fichiers et déposez-les dans un dossier "
+                "`reference_data/` de votre dépôt GitHub — l'app les "
+                "détectera alors automatiquement au démarrage, sans "
+                "jamais avoir besoin de les reconstruire."
+            )
+            for nom in (f"reference_{dept}.csv", f"tendance_{dept}.csv",
+                        f"transactions_nettoyees_{dept}.csv", f"meta_{dept}.json"):
+                chemin = core.OUTPUT_DIR / nom
+                if chemin.exists():
+                    st.download_button(
+                        f"⬇️ {nom}", chemin.read_bytes(), file_name=nom,
+                        key=f"dl_{nom}", use_container_width=True,
+                    )
 else:
     with st.sidebar.status(f"Préparation automatique des données ({dept})...", expanded=True) as status_box:
         try:

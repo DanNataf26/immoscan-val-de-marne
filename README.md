@@ -110,6 +110,25 @@ proposé permet une vérification manuelle gratuite sans clé.
 proximité (signal de dynamisme d'un quartier) nécessiteraient l'API Sitadel
 (data.gouv.fr) ou Pappers Immo — à explorer plus tard si utile.
 
+## Référence DVF permanente (recommandé, évite les lenteurs au démarrage)
+
+Par défaut, la référence de prix (2021+) est reconstruite depuis zéro à
+chaque redémarrage à froid de l'app — le cache de travail (`output/`) est
+stocké sur un disque éphémère qui ne survit pas aux mises en veille de
+Streamlit Community Cloud. C'est la cause principale des lenteurs (voire
+échecs si data.gouv.fr répond mal à ce moment précis) au premier chargement
+après une période d'inactivité.
+
+**Solution, sur le même principe que Cerema DVF+** : une fois la référence
+construite au moins une fois (automatique au premier lancement), la barre
+latérale propose de télécharger 4 fichiers
+(`reference_{dept}.csv`, `tendance_{dept}.csv`,
+`transactions_nettoyees_{dept}.csv`, `meta_{dept}.json`) à déposer dans un
+dossier `reference_data/` à la racine du dépôt GitHub. Une fois fait, l'app
+détecte automatiquement ces fichiers à chaque démarrage et les recopie dans
+le cache de travail — plus aucun téléchargement depuis data.gouv.fr requis
+au démarrage pour ce département.
+
 ## Historique complémentaire 2014-2020 (Cerema DVF+)
 
 En complément de la source principale (geo-dvf, 2021 et après), l'app peut
