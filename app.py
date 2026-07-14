@@ -427,27 +427,7 @@ with tab_recherche:
         c3.metric("Département", detected_dept)
         c4.metric("Score BAN", f"{geo.get('score', 0):.2f}" if geo.get("score") else "—")
 
-        col_radius, col_years = st.columns(2)
-        with col_radius:
-            radius_comparables = st.slider(
-                "Rayon pour les ventes comparables", 100, 1000, 500, step=50, format="%d m",
-            )
-        with col_years:
-            since_years = st.slider("Comparables : dernières N années", 1, 15, 5, step=1)
-
-        col_nb, col_tri = st.columns(2)
-        with col_nb:
-            max_comparables = st.slider(
-                "Nombre de comparables affichés", 5, 100, 15, step=5,
-            )
-        with col_tri:
-            tri_label = st.selectbox(
-                "Trier par", ["Distance (plus proches d'abord)", "Date (plus récentes d'abord)"],
-            )
-            tri_comparables = "date" if tri_label.startswith("Date") else "distance"
-
-        st.subheader("Vues du bien")
-        render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_comparables)
+        map_placeholder = st.container()
 
         if detected_dept != dept:
             st.warning(
@@ -466,6 +446,9 @@ with tab_recherche:
 
         # --- Historique probable + comparables ---------------------------------
         if active_ref is None:
+            with map_placeholder:
+                st.subheader("Vues du bien")
+                render_geo_views(geo["latitude"], geo["longitude"], radius_m=500)
             st.info(
                 f"La référence de prix pour le département {active_dept} n'est "
                 "pas encore prête (voir la barre latérale) : historique DVF et "
@@ -504,7 +487,28 @@ with tab_recherche:
             except SystemExit as e:
                 st.warning(str(e))
 
-            st.subheader(f"Ventes comparables à proximité (derniers {since_years} ans)")
+            st.subheader("Ventes comparables à proximité")
+            col_radius, col_years = st.columns(2)
+            with col_radius:
+                radius_comparables = st.slider(
+                    "Rayon", 100, 1000, 500, step=50, format="%d m",
+                )
+            with col_years:
+                since_years = st.slider("Dernières N années", 1, 15, 5, step=1)
+
+            col_nb, col_tri = st.columns(2)
+            with col_nb:
+                max_comparables = st.slider("Nombre affiché", 5, 100, 15, step=5)
+            with col_tri:
+                tri_label = st.selectbox(
+                    "Trier par", ["Distance (plus proches d'abord)", "Date (plus récentes d'abord)"],
+                )
+                tri_comparables = "date" if tri_label.startswith("Date") else "distance"
+
+            with map_placeholder:
+                st.subheader("Vues du bien")
+                render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_comparables)
+
             try:
                 comparables, resume_comparables = core.find_comparables(
                     active_dept, geo["latitude"], geo["longitude"],
@@ -535,7 +539,48 @@ with tab_recherche:
                                 "immeubles en bloc sont traités)."
                             )
 
-                    st.dataframe(comparables, use_container_width=True)
+                    with st.expander("🔍 Filtrer le tableau ci-dessous"):
+                        fc1, fc2, fc3 = st.columns(3)
+                        with fc1:
+                            types_dispo_filtre = sorted(comparables["type_local"].dropna().unique())
+                            types_choisis = st.multiselect(
+                                "Type de bien", types_dispo_filtre, default=types_dispo_filtre,
+                            )
+                        with fc2:
+                            communes_dispo_filtre = sorted(comparables["nom_commune"].dropna().unique())
+                            communes_choisies = st.multiselect(
+                                "Commune", communes_dispo_filtre, default=communes_dispo_filtre,
+                            )
+                        with fc3:
+                            sources_dispo_filtre = sorted(comparables["source"].dropna().unique())
+                            sources_choisies = st.multiselect(
+                                "Source", sources_dispo_filtre, default=sources_dispo_filtre,
+                            )
+                        prix_min = float(comparables["prix_m2"].min())
+                        prix_max = float(comparables["prix_m2"].max())
+                        if prix_max > prix_min:
+                            plage_prix = st.slider(
+                                "Prix/m² (€)", prix_min, prix_max, (prix_min, prix_max),
+                            )
+                        else:
+                            plage_prix = (prix_min, prix_max)
+
+                    comparables_filtres = comparables[
+                        comparables["type_local"].isin(types_choisis)
+                        & comparables["nom_commune"].isin(communes_choisies)
+                        & comparables["source"].isin(sources_choisies)
+                        & comparables["prix_m2"].between(plage_prix[0], plage_prix[1])
+                    ]
+                    if comparables_filtres.empty:
+                        st.caption("Aucun résultat ne correspond aux filtres sélectionnés.")
+                    else:
+                        st.dataframe(comparables_filtres, use_container_width=True)
+                        if len(comparables_filtres) < len(comparables):
+                            st.caption(
+                                f"{len(comparables_filtres)}/{len(comparables)} lignes "
+                                "affichées après filtrage (le tri des colonnes reste "
+                                "possible en tapant sur leur en-tête)."
+                            )
                     st.caption(
                         "Toutes les ventes à proximité, quel que soit le numéro/la "
                         "rue — pour comparer le prix au marché local récent. Les "
