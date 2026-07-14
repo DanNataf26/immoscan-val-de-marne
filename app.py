@@ -435,6 +435,17 @@ with tab_recherche:
         with col_years:
             since_years = st.slider("Comparables : dernières N années", 1, 15, 5, step=1)
 
+        col_nb, col_tri = st.columns(2)
+        with col_nb:
+            max_comparables = st.slider(
+                "Nombre de comparables affichés", 5, 100, 15, step=5,
+            )
+        with col_tri:
+            tri_label = st.selectbox(
+                "Trier par", ["Distance (plus proches d'abord)", "Date (plus récentes d'abord)"],
+            )
+            tri_comparables = "date" if tri_label.startswith("Date") else "distance"
+
         st.subheader("Vues du bien")
         render_geo_views(geo["latitude"], geo["longitude"], radius_m=radius_comparables)
 
@@ -495,17 +506,43 @@ with tab_recherche:
 
             st.subheader(f"Ventes comparables à proximité (derniers {since_years} ans)")
             try:
-                comparables = core.find_comparables(
+                comparables, resume_comparables = core.find_comparables(
                     active_dept, geo["latitude"], geo["longitude"],
                     radius_m=radius_comparables, since_years=since_years,
+                    max_results=max_comparables, tri=tri_comparables,
                 )
                 if comparables.empty:
                     st.caption("Aucune transaction DVF comparable dans ce rayon/cette période.")
                 else:
+                    total = resume_comparables["total"]
+                    par_source = resume_comparables["total_par_source"]
+                    st.caption(
+                        f"**{total} bien(s) trouvé(s) au total** dans ce rayon/cette "
+                        f"période (affichage limité aux {max_comparables} premiers, "
+                        f"triés par {'date' if tri_comparables == 'date' else 'distance'}) — "
+                        + " · ".join(f"{v} via {k}" for k, v in par_source.items())
+                    )
+
+                    prix_par_type = resume_comparables["prix_m2_moyen_par_type"]
+                    if prix_par_type:
+                        cols_prix = st.columns(len(prix_par_type))
+                        for col, (type_bien, prix_moy) in zip(cols_prix, prix_par_type.items()):
+                            col.metric(f"€/m² moyen — {type_bien}", f"{prix_moy:,.0f} €")
+                        if "Local commercial" not in prix_par_type and "Local industriel. commercial ou assimilé" not in prix_par_type:
+                            st.caption(
+                                "ℹ️ Les locaux commerciaux ne sont pas suivis par cette "
+                                "app pour l'instant (seuls maisons, appartements et "
+                                "immeubles en bloc sont traités)."
+                            )
+
                     st.dataframe(comparables, use_container_width=True)
                     st.caption(
                         "Toutes les ventes à proximité, quel que soit le numéro/la "
-                        "rue — pour comparer le prix au marché local récent."
+                        "rue — pour comparer le prix au marché local récent. Les "
+                        "sources DVF (2021+) et Cerema DVF+ (2014-2020) sont "
+                        "mélangées dans un seul classement (par distance ou par "
+                        "date selon le tri choisi ci-dessus), pas affichées "
+                        "séparément."
                     )
             except SystemExit as e:
                 st.warning(str(e))
