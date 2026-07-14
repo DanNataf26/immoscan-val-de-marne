@@ -764,7 +764,8 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
 
 def find_comparables(dept: str, lat: float, lon: float, type_local: str | None = None,
                       radius_m: float = 500, max_results: int = 15,
-                      since_years: int = 5, include_cerema: bool = True) -> pd.DataFrame:
+                      since_years: int = 5, include_cerema: bool = True,
+                      tri: str = "distance") -> tuple[pd.DataFrame, dict]:
     """
     Cherche, dans le cache des transactions nettoyées, les ventes réelles les
     plus proches d'un point GPS donné, limitées aux `since_years` dernières
@@ -776,6 +777,16 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     département (2014-2020, importé manuellement — voir README), ses ventes
     sont ajoutées en complément historique pour la même zone/période/type,
     avec une colonne 'source' pour les distinguer.
+
+    `tri` détermine l'ordre du tableau retourné : "distance" (les plus
+    proches en premier, par défaut) ou "date" (les plus récentes en premier).
+    Dans les deux cas, les résultats DVF et Cerema DVF+ restent mélangés
+    dans un seul tableau trié globalement — ce n'est pas une lecture
+    chronologique du quartier, seulement un classement selon le critère choisi.
+
+    Retourne un tuple (DataFrame limité à `max_results` lignes selon le tri
+    choisi, dict de synthèse sur l'ENSEMBLE des résultats trouvés avant
+    troncature : nombre total par source, prix moyen/m² par type de bien).
     """
     from datetime import datetime
 
@@ -810,13 +821,29 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
                 frames.append(cerema)
 
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame(), {"total": 0, "total_par_source": {}, "prix_m2_moyen_par_type": {}}
 
     combined = pd.concat(frames, ignore_index=True)
     combined["distance_m"] = combined.apply(
         lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
     )
-    proches = combined[combined["distance_m"] <= radius_m].sort_values("distance_m")
+    proches_complet = combined[combined["distance_m"] <= radius_m]
+
+    # Synthèse calculée sur l'ENSEMBLE trouvé (avant troncature à max_results),
+    # pour donner une vision complète même quand le tableau affiché est limité.
+    resume = {
+        "total": len(proches_complet),
+        "total_par_source": proches_complet["source"].value_counts().to_dict(),
+        "prix_m2_moyen_par_type": (
+            proches_complet.groupby("type_local")["prix_m2"].mean().round(0).to_dict()
+        ),
+    }
+
+    if tri == "date":
+        proches = proches_complet.sort_values("date_mutation", ascending=False)
+    else:
+        proches = proches_complet.sort_values("distance_m")
+
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
     # adresse_numero/adresse_nom_voie n'existent pas côté Cerema (source sans
@@ -841,7 +868,7 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
             "(adresse non disponible pour cette source)"
         )
         cols = ["adresse_numero", "adresse_nom_voie"] + cols
-    return proches[cols].head(max_results)
+    return proches[cols].head(max_results), resume
 
 
 
