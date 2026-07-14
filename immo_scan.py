@@ -1041,28 +1041,34 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
         # Cerema DVF+ même quand aucune vente récente (2021+) n'existe pour
         # faire le pont habituel. Moins immédiat qu'une correspondance DVF
         # directe, mais bien plus fiable qu'un simple repli de proximité.
+        #
+        # IMPORTANT : `get_parcelle_cadastrale` peut légitimement retourner
+        # PLUSIEURS parcelles candidates quand le point GPS est proche d'une
+        # frontière (comportement volontaire pour d'autres usages). Ici, on
+        # ne procède QUE si une seule parcelle sans ambiguïté est trouvée —
+        # sinon, on risquerait de mélanger l'historique de plusieurs biens
+        # voisins différents sous une même adresse, ce qui serait pire que
+        # de ne rien afficher.
         try:
             parcelle_info = get_parcelle_cadastrale(lat, lon)
         except Exception:
             parcelle_info = None
 
-        if parcelle_info and parcelle_info.get("parcelles"):
+        if parcelle_info and parcelle_info.get("nb_parcelles") == 1 and parcelle_info.get("parcelles"):
             cerema = load_cerema_cache(dept)
             if cerema is not None and not cerema.empty:
                 cerema = cerema.copy()
                 cerema["_section"] = cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
                 cerema["_numero"] = cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
-                trouves = []
-                for p in parcelle_info["parcelles"]:
-                    sec = str(p.get("section") or "").lstrip("0").upper()
-                    num = str(p.get("numero") or "").lstrip("0")
-                    if not sec or not num:
-                        continue
-                    match = cerema[(cerema["_section"] == sec) & (cerema["_numero"] == num)]
-                    if not match.empty:
-                        trouves.append(match)
-                if trouves:
-                    hist_cerema = pd.concat(trouves, ignore_index=True).drop(columns=["_section", "_numero"])
+                p = parcelle_info["parcelles"][0]
+                sec = str(p.get("section") or "").lstrip("0").upper()
+                num = str(p.get("numero") or "").lstrip("0")
+                hist_cerema = (
+                    cerema[(cerema["_section"] == sec) & (cerema["_numero"] == num)].copy()
+                    if sec and num else pd.DataFrame()
+                )
+                if not hist_cerema.empty:
+                    hist_cerema = hist_cerema.drop(columns=["_section", "_numero"])
                     hist_cerema["correspondance"] = "Exacte (parcelle cadastrale confirmée via GPS, Cerema DVF+)"
                     hist_cerema["nom_commune"] = commune or hist_cerema.get("nom_commune")
                     hist_cerema["adresse_dvf"] = address
