@@ -820,14 +820,26 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
     # adresse_numero/adresse_nom_voie n'existent pas côté Cerema (source sans
-    # champ adresse, seulement des identifiants de parcelle — voir README) :
-    # on remplace le vide par un texte explicite plutôt qu'un "None" qui
-    # ressemble à une erreur.
+    # champ adresse, seulement des identifiants de parcelle — voir README).
+    # On uniformise TOUTE la colonne en texte (pas seulement les lignes
+    # Cerema) : un mélange nombre/texte dans une même colonne pandas fait
+    # planter la conversion Arrow utilisée par Streamlit pour l'affichage
+    # (erreur "Could not convert 'n/d' ... tried to convert to double").
     if "adresse_numero" in proches.columns:
         proches = proches.copy()
-        proches["adresse_numero"] = proches["adresse_numero"].astype(object)
-        proches.loc[proches["source"] == "Cerema DVF+", "adresse_numero"] = "n/d"
-        proches.loc[proches["source"] == "Cerema DVF+", "adresse_nom_voie"] = "(adresse non disponible pour cette source)"
+
+        def _fmt_numero(v):
+            if pd.isna(v):
+                return "n/d"
+            try:
+                return str(int(v))  # évite le ".0" final sur les numéros entiers
+            except (TypeError, ValueError):
+                return str(v)
+
+        proches["adresse_numero"] = proches["adresse_numero"].map(_fmt_numero)
+        proches["adresse_nom_voie"] = proches["adresse_nom_voie"].fillna(
+            "(adresse non disponible pour cette source)"
+        )
         cols = ["adresse_numero", "adresse_nom_voie"] + cols
     return proches[cols].head(max_results)
 
