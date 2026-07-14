@@ -1036,6 +1036,40 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 result = pd.concat([result, hist_cerema], ignore_index=True)
 
     if result.empty and lat is not None and lon is not None:
+        # Repli : la parcelle cadastrale (API IGN, par coordonnées GPS) est
+        # indépendante de toute vente DVF — elle permet de chercher dans
+        # Cerema DVF+ même quand aucune vente récente (2021+) n'existe pour
+        # faire le pont habituel. Moins immédiat qu'une correspondance DVF
+        # directe, mais bien plus fiable qu'un simple repli de proximité.
+        try:
+            parcelle_info = get_parcelle_cadastrale(lat, lon)
+        except Exception:
+            parcelle_info = None
+
+        if parcelle_info and parcelle_info.get("parcelles"):
+            cerema = load_cerema_cache(dept)
+            if cerema is not None and not cerema.empty:
+                cerema = cerema.copy()
+                cerema["_section"] = cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
+                cerema["_numero"] = cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
+                trouves = []
+                for p in parcelle_info["parcelles"]:
+                    sec = str(p.get("section") or "").lstrip("0").upper()
+                    num = str(p.get("numero") or "").lstrip("0")
+                    if not sec or not num:
+                        continue
+                    match = cerema[(cerema["_section"] == sec) & (cerema["_numero"] == num)]
+                    if not match.empty:
+                        trouves.append(match)
+                if trouves:
+                    hist_cerema = pd.concat(trouves, ignore_index=True).drop(columns=["_section", "_numero"])
+                    hist_cerema["correspondance"] = "Exacte (parcelle cadastrale confirmée via GPS, Cerema DVF+)"
+                    hist_cerema["nom_commune"] = commune or hist_cerema.get("nom_commune")
+                    hist_cerema["adresse_dvf"] = address
+                    hist_cerema["nb_lots"] = 1
+                    result = hist_cerema
+
+    if result.empty and lat is not None and lon is not None:
         # Repli très étroit, clairement signalé comme approximatif.
         df2 = df.dropna(subset=["latitude", "longitude"]).copy()
         if not df2.empty:

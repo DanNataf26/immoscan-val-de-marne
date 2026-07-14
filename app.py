@@ -457,10 +457,16 @@ with tab_recherche:
         else:
             st.subheader("Historique probable des ventes de ce bien précis")
             try:
-                history = core.find_property_history(
-                    active_dept, geo["label"], geo["latitude"], geo["longitude"],
-                    commune=geo.get("commune"),
-                )
+                if st.session_state.get("history_cache_key") == geo["label"]:
+                    history = st.session_state["history_cache_result"]
+                else:
+                    with st.spinner("Recherche de l'historique (et, si besoin, du cadastre)..."):
+                        history = core.find_property_history(
+                            active_dept, geo["label"], geo["latitude"], geo["longitude"],
+                            commune=geo.get("commune"),
+                        )
+                    st.session_state["history_cache_key"] = geo["label"]
+                    st.session_state["history_cache_result"] = history
                 if history.empty:
                     st.caption(
                         "Aucune vente DVF ne correspond à ce numéro et cette rue "
