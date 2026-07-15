@@ -472,88 +472,6 @@ with tab_recherche:
                         "Aucune vente DVF ne correspond à ce numéro et cette rue "
                         "précisément (sur toutes les années chargées)."
                     )
-                    with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
-                        with st.spinner("Test en direct : RNB étape 1 (adresse)..."):
-                            try:
-                                import requests as _requests
-                                _resp_rnb1 = _requests.get(
-                                    f"{core.RNB_API_URL}/address/",
-                                    params={"q": geo["label"]}, timeout=10,
-                                )
-                                _data_rnb1 = _resp_rnb1.json()
-                                st.write(f"**RNB étape 1 — code HTTP : {_resp_rnb1.status_code}**")
-                                st.json(_data_rnb1)
-                            except Exception as exc:
-                                _data_rnb1 = None
-                                st.error(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}")
-
-                        if _data_rnb1 and _data_rnb1.get("results"):
-                            st.write("**Étape 2 — test cadastre strict au point de chaque bâtiment :**")
-                            for i, bat in enumerate(_data_rnb1["results"]):
-                                rnb_id = bat.get("rnb_id")
-                                coords = (bat.get("point") or {}).get("coordinates")
-                                if not coords:
-                                    st.write(f"Bâtiment {i} (`{rnb_id}`) — pas de point exploitable.")
-                                    continue
-                                lon_bat, lat_bat = coords
-                                try:
-                                    res_bat = core._point_exact_apicarto(lat_bat, lon_bat)
-                                    st.write(f"Bâtiment {i} (`{rnb_id}`), point ({lat_bat:.6f}, {lon_bat:.6f}) :")
-                                    st.json(res_bat if res_bat else {"resultat": None})
-                                except Exception as exc:
-                                    st.error(f"Exception (bâtiment {i}) : {type(exc).__name__}: {exc}")
-
-                        with st.spinner("Test en direct : RNB (complet) puis GPS si besoin..."):
-                            try:
-                                diag_parcelle = core.get_parcelle_via_rnb(geo["label"])
-                                methode_utilisee = "RNB (par adresse)"
-                            except Exception as exc:
-                                diag_parcelle = None
-                                methode_utilisee = None
-                                st.error(f"Exception RNB : {type(exc).__name__}: {exc}")
-                            if not diag_parcelle:
-                                try:
-                                    diag_parcelle = core.get_parcelle_cadastrale(
-                                        geo["latitude"], geo["longitude"]
-                                    )
-                                    methode_utilisee = "GPS (Géoplateforme/API Carto)"
-                                except Exception as exc:
-                                    st.error(f"Exception GPS : {type(exc).__name__}: {exc}")
-                        st.write(f"**Méthode ayant abouti : {methode_utilisee or 'aucune'}**")
-                        st.write("**Résultat :**")
-                        st.json(diag_parcelle if diag_parcelle else {"resultat": None})
-
-                        if diag_parcelle:
-                            st.write(
-                                f"nb_parcelles = **{diag_parcelle.get('nb_parcelles')}** "
-                                f"(source : {diag_parcelle.get('source')})"
-                            )
-                            if diag_parcelle.get("nb_parcelles") != 1:
-                                st.warning(
-                                    "Plus d'une parcelle trouvée (ou 0) — c'est pour ça "
-                                    "que le lien avec Cerema ne se fait pas automatiquement "
-                                    "(voir la logique de sécurité anti-faux-positifs)."
-                                )
-                            else:
-                                diag_cerema = core.load_cerema_cache(active_dept)
-                                if diag_cerema is None:
-                                    st.warning("Aucun cache Cerema trouvé pour ce département.")
-                                else:
-                                    sec = str(diag_parcelle.get("section") or "").lstrip("0").upper()
-                                    num = str(diag_parcelle.get("numero") or "").lstrip("0")
-                                    code_insee_cible = str(geo.get("code_insee") or diag_parcelle.get("code_insee") or "").strip()
-                                    diag_cerema = diag_cerema.copy()
-                                    diag_cerema["_section"] = diag_cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
-                                    diag_cerema["_numero"] = diag_cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
-                                    diag_cerema["_code_insee"] = diag_cerema["id_parcelle"].astype(str).str[0:5]
-                                    diag_match = diag_cerema[
-                                        (diag_cerema["_section"] == sec) & (diag_cerema["_numero"] == num)
-                                        & (diag_cerema["_code_insee"] == code_insee_cible)
-                                    ]
-                                    st.write(f"Recherché dans Cerema : code_insee=**{code_insee_cible}**, section=**{sec}**, numéro=**{num}**")
-                                    st.write(f"Lignes Cerema correspondantes trouvées : **{len(diag_match)}**")
-                                    if not diag_match.empty:
-                                        st.dataframe(diag_match, use_container_width=True)
                 else:
                     st.dataframe(history, use_container_width=True)
                     st.caption(
@@ -572,6 +490,141 @@ with tab_recherche:
                             parsed = core.parse_id_parcelle(derniere.get("id_parcelle"))
                             if parsed:
                                 known_parcelle_ids = parsed
+
+                with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
+                    import json as _json
+                    _rapport = []  # accumule le texte pour copie/téléchargement en fin de bloc
+
+                    def _log(titre, contenu=None):
+                        """Affiche à l'écran ET ajoute au rapport texte copiable."""
+                        st.write(titre)
+                        _rapport.append(titre.replace("**", ""))
+                        if contenu is not None:
+                            if isinstance(contenu, (dict, list)):
+                                texte = _json.dumps(contenu, ensure_ascii=False, indent=2)
+                                st.json(contenu)
+                            else:
+                                texte = str(contenu)
+                            _rapport.append(texte)
+                        _rapport.append("")
+
+                    _log(f"Adresse : {geo['label']}")
+                    _log(
+                        f"Commune affichée : {geo.get('commune')} — "
+                        f"code_insee utilisé (BAN) : {geo.get('code_insee')}"
+                    )
+                    if geo.get("code_insee") and not str(geo["code_insee"]).startswith(active_dept):
+                        st.error(
+                            f"⚠️ Incohérence : ce code_insee ne commence pas par "
+                            f"le département actif ({active_dept}) — probable "
+                            "erreur de géocodage BAN pour cette adresse."
+                        )
+                        _rapport.append(
+                            f"⚠️ INCOHÉRENCE : code_insee ne commence pas par {active_dept}"
+                        )
+                        _rapport.append("")
+
+                    with st.spinner("Test en direct : RNB étape 1 (adresse)..."):
+                        try:
+                            import requests as _requests
+                            _resp_rnb1 = _requests.get(
+                                f"{core.RNB_API_URL}/address/",
+                                params={"q": geo["label"]}, timeout=10,
+                            )
+                            _data_rnb1 = _resp_rnb1.json()
+                            _log(f"**RNB étape 1 — code HTTP : {_resp_rnb1.status_code}**", _data_rnb1)
+                        except Exception as exc:
+                            _data_rnb1 = None
+                            st.error(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}")
+                            _rapport.append(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}\n")
+
+                    if _data_rnb1 and _data_rnb1.get("results"):
+                        st.write("**Étape 2 — test cadastre strict au point de chaque bâtiment :**")
+                        _rapport.append("Étape 2 — test cadastre strict au point de chaque bâtiment :\n")
+                        for i, bat in enumerate(_data_rnb1["results"]):
+                            rnb_id = bat.get("rnb_id")
+                            coords = (bat.get("point") or {}).get("coordinates")
+                            if not coords:
+                                _log(f"Bâtiment {i} ({rnb_id}) — pas de point exploitable.")
+                                continue
+                            lon_bat, lat_bat = coords
+                            try:
+                                res_bat = core._point_exact_apicarto(lat_bat, lon_bat)
+                                _log(
+                                    f"Bâtiment {i} ({rnb_id}), point ({lat_bat:.6f}, {lon_bat:.6f}) :",
+                                    res_bat if res_bat else {"resultat": None},
+                                )
+                            except Exception as exc:
+                                st.error(f"Exception (bâtiment {i}) : {type(exc).__name__}: {exc}")
+                                _rapport.append(f"Exception (bâtiment {i}) : {type(exc).__name__}: {exc}\n")
+
+                    with st.spinner("Test en direct : RNB (complet) puis GPS si besoin..."):
+                        diag_parcelle, methode_utilisee = None, None
+                        try:
+                            diag_parcelle = core.get_parcelle_via_rnb(geo["label"])
+                            methode_utilisee = "RNB (par adresse)"
+                        except Exception as exc:
+                            st.error(f"Exception RNB : {type(exc).__name__}: {exc}")
+                            _rapport.append(f"Exception RNB : {type(exc).__name__}: {exc}\n")
+                        if not diag_parcelle:
+                            try:
+                                diag_parcelle = core.get_parcelle_cadastrale(
+                                    geo["latitude"], geo["longitude"]
+                                )
+                                methode_utilisee = "GPS (Géoplateforme/API Carto)"
+                            except Exception as exc:
+                                st.error(f"Exception GPS : {type(exc).__name__}: {exc}")
+                                _rapport.append(f"Exception GPS : {type(exc).__name__}: {exc}\n")
+                    _log(f"**Méthode ayant abouti : {methode_utilisee or 'aucune'}**")
+                    _log("**Résultat :**", diag_parcelle if diag_parcelle else {"resultat": None})
+
+                    if diag_parcelle:
+                        _log(
+                            f"nb_parcelles = {diag_parcelle.get('nb_parcelles')} "
+                            f"(source : {diag_parcelle.get('source')})"
+                        )
+                        if diag_parcelle.get("nb_parcelles") != 1:
+                            st.warning(
+                                "Plus d'une parcelle trouvée (ou 0) — c'est pour ça "
+                                "que le lien avec Cerema ne se fait pas automatiquement "
+                                "(voir la logique de sécurité anti-faux-positifs)."
+                            )
+                        else:
+                            diag_cerema = core.load_cerema_cache(active_dept)
+                            if diag_cerema is None:
+                                st.warning("Aucun cache Cerema trouvé pour ce département.")
+                            else:
+                                sec = str(diag_parcelle.get("section") or "").lstrip("0").upper()
+                                num = str(diag_parcelle.get("numero") or "").lstrip("0")
+                                code_insee_cible = str(geo.get("code_insee") or diag_parcelle.get("code_insee") or "").strip()
+                                diag_cerema = diag_cerema.copy()
+                                diag_cerema["_section"] = diag_cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
+                                diag_cerema["_numero"] = diag_cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
+                                diag_cerema["_code_insee"] = diag_cerema["id_parcelle"].astype(str).str[0:5]
+                                diag_match = diag_cerema[
+                                    (diag_cerema["_section"] == sec) & (diag_cerema["_numero"] == num)
+                                    & (diag_cerema["_code_insee"] == code_insee_cible)
+                                ]
+                                _log(
+                                    f"Recherché dans Cerema : code_insee={code_insee_cible}, "
+                                    f"section={sec}, numéro={num}"
+                                )
+                                _log(f"Lignes Cerema correspondantes trouvées : {len(diag_match)}")
+                                if not diag_match.empty:
+                                    st.dataframe(diag_match, use_container_width=True)
+                                    _rapport.append(diag_match.to_string(index=False))
+                                    _rapport.append("")
+
+                    st.divider()
+                    st.markdown("**📋 Copier ce diagnostic**")
+                    texte_complet = "\n".join(_rapport)
+                    st.code(texte_complet, language="text")
+                    st.download_button(
+                        "⬇️ Télécharger ce diagnostic (.txt)",
+                        texte_complet,
+                        file_name=f"diagnostic_{geo['label'][:30].replace(' ', '_')}.txt",
+                        use_container_width=True,
+                    )
             except SystemExit as e:
                 st.warning(str(e))
 
