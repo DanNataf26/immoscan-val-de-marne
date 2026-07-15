@@ -484,17 +484,35 @@ def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
     appt_pure = (df["nblocapt"] > 0) & (df["nblocmai"] == 0) & (df["nblocact"] == 0)
     act_pure = (df["nblocact"] > 0) & (df["nblocmai"] == 0) & (df["nblocapt"] == 0)
 
+    def _composition(r, nb_lots_col, libelle):
+        """Détail lisible : nombre de lots du type identifié, + dépendances
+        (places de parking, caves...) si le champ nblocdep en signale."""
+        base = f"{int(r[nb_lots_col])} {libelle}"
+        nb_dep = r.get("nblocdep", 0)
+        if pd.notna(nb_dep) and nb_dep > 0:
+            base += f" + {int(nb_dep)} dépendance(s) (parking/cave, non chiffrées en surface)"
+        return base
+
     d_maison = df[maison_pure].copy()
     d_maison["type_local"] = "Maison"
     d_maison["surface_reelle_bati"] = d_maison["sbatmai"]
+    d_maison["nb_lots"] = d_maison["nblocmai"]
+    d_maison["composition"] = d_maison.apply(
+        lambda r: _composition(r, "nblocmai", "Maison"), axis=1)
 
     d_appt = df[appt_pure].copy()
     d_appt["type_local"] = "Appartement"
     d_appt["surface_reelle_bati"] = d_appt["sbatapt"]
+    d_appt["nb_lots"] = d_appt["nblocapt"]
+    d_appt["composition"] = d_appt.apply(
+        lambda r: _composition(r, "nblocapt", "Appartement"), axis=1)
 
     d_act = df[act_pure].copy()
     d_act["type_local"] = "Local industriel. commercial ou assimilé"
     d_act["surface_reelle_bati"] = d_act["sbatact"]
+    d_act["nb_lots"] = d_act["nblocact"]
+    d_act["composition"] = d_act.apply(
+        lambda r: _composition(r, "nblocact", "Local industriel. commercial ou assimilé"), axis=1)
 
     combined = pd.concat([d_maison, d_appt, d_act], ignore_index=True)
     if combined.empty:
@@ -523,7 +541,7 @@ def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
 
     cols = ["date_mutation", "annee", "valeur_fonciere", "surface_reelle_bati",
             "type_local", "prix_m2", "id_parcelle", "code_commune", "nom_commune",
-            "latitude", "longitude", "source"]
+            "latitude", "longitude", "source", "nb_lots", "composition"]
     return combined[cols].reset_index(drop=True)
 
 
@@ -1119,7 +1137,9 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 hist_cerema["correspondance"] = "Exacte (identifiant de parcelle confirmé, Cerema DVF+)"
                 hist_cerema["nom_commune"] = result["nom_commune"].iloc[0]
                 hist_cerema["adresse_dvf"] = result["adresse_dvf"].iloc[0]
-                hist_cerema["nb_lots"] = 1
+                # nb_lots vient désormais du cache Cerema lui-même (nombre
+                # réel de lots du type identifié — voir _clean_cerema_dataframe),
+                # plus la colonne composition pour le détail (dont dépendances).
                 result = pd.concat([result, hist_cerema], ignore_index=True)
 
     if result.empty and lat is not None and lon is not None:
@@ -1174,7 +1194,6 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                     hist_cerema["correspondance"] = "Exacte (parcelle cadastrale confirmée via GPS, Cerema DVF+)"
                     hist_cerema["nom_commune"] = commune or hist_cerema.get("nom_commune")
                     hist_cerema["adresse_dvf"] = address
-                    hist_cerema["nb_lots"] = 1
                     result = hist_cerema
 
     if result.empty and lat is not None and lon is not None:
