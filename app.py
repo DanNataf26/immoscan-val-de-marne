@@ -488,18 +488,20 @@ with tab_recherche:
                                 st.error(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}")
 
                         if _data_rnb1 and _data_rnb1.get("results"):
-                            st.write(f"**RNB étape 2 — parcelles pour chaque bâtiment candidat :**")
+                            st.write("**Étape 2 — test cadastre strict au point de chaque bâtiment :**")
                             for i, bat in enumerate(_data_rnb1["results"]):
                                 rnb_id = bat.get("rnb_id")
+                                coords = (bat.get("point") or {}).get("coordinates")
+                                if not coords:
+                                    st.write(f"Bâtiment {i} (`{rnb_id}`) — pas de point exploitable.")
+                                    continue
+                                lon_bat, lat_bat = coords
                                 try:
-                                    _resp_rnb2 = _requests.get(
-                                        f"{core.RNB_API_URL}/{rnb_id}/",
-                                        params={"plots": 1}, timeout=10,
-                                    )
-                                    st.write(f"Bâtiment {i} (`{rnb_id}`) — code HTTP : {_resp_rnb2.status_code}")
-                                    st.json(_resp_rnb2.json())
+                                    res_bat = core._point_exact_apicarto(lat_bat, lon_bat)
+                                    st.write(f"Bâtiment {i} (`{rnb_id}`), point ({lat_bat:.6f}, {lon_bat:.6f}) :")
+                                    st.json(res_bat if res_bat else {"resultat": None})
                                 except Exception as exc:
-                                    st.error(f"Exception RNB étape 2 (bâtiment {i}) : {type(exc).__name__}: {exc}")
+                                    st.error(f"Exception (bâtiment {i}) : {type(exc).__name__}: {exc}")
 
                         with st.spinner("Test en direct : RNB (complet) puis GPS si besoin..."):
                             try:

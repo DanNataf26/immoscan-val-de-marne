@@ -1236,22 +1236,25 @@ RNB_API_URL = "https://rnb-api.beta.gouv.fr/api/alpha/buildings"
 
 def get_parcelle_via_rnb(address: str) -> dict | None:
     """
-    Cherche la parcelle cadastrale d'une adresse via le RNB (Référentiel
-    National des Bâtiments, beta.gouv.fr — service public gratuit, sans clé).
+    Identifie le(s) bâtiment(s) correspondant à une adresse via le RNB
+    (Référentiel National des Bâtiments, beta.gouv.fr — service public
+    gratuit, sans clé), puis interroge le cadastre au point précis de CE
+    bâtiment (et non au point d'adresse brut de la BAN).
 
-    Contrairement à une recherche par coordonnées GPS (qui peut être
-    ambiguë dans les zones denses/subdivisées, plusieurs parcelles pouvant
-    être proches d'un même point), cette méthode passe par l'ADRESSE
-    elle-même :
-    1. Le RNB géocode l'adresse via la BAN (avec un score de confiance) et
-       identifie LE bâtiment correspondant.
-    2. On récupère ensuite les parcelles cadastrales qui intersectent
-       géométriquement ce bâtiment précis, triées par taux de recouvrement
-       — on retient celle qui couvre le plus le bâtiment.
+    Pourquoi : le RNB géocode l'adresse via la BAN (avec un score de
+    confiance) et identifie LE ou LES bâtiments réels à cette adresse, avec
+    leur point géométrique propre — dérivé de l'empreinte du bâtiment, donc
+    typiquement bien à l'intérieur de la bonne parcelle, contrairement au
+    point d'adresse générique (souvent placé côté rue, proche d'une
+    frontière de parcelle dans les zones denses/subdivisées).
 
-    Documentation officielle : https://rnb-fr.gitbook.io/documentation
-    Non testé en conditions réelles faute d'accès réseau en développement —
-    suit précisément le schéma OpenAPI publié par le RNB.
+    N'utilise PAS le paramètre `plots` de l'API RNB (documenté mais semble
+    ne renvoyer aucune parcelle en conditions réelles testées — peut-être
+    une fonctionnalité pas encore pleinement déployée sur ce service beta).
+    Repose à la place sur une requête cadastre ponctuelle (Géoplateforme
+    puis API Carto, voir `get_parcelle_cadastrale`) au(x) point(s) bâtiment
+    obtenu(s), en essayant chaque bâtiment candidat jusqu'à obtenir un
+    résultat non ambigu.
     """
     import requests
 
@@ -1263,39 +1266,30 @@ def get_parcelle_via_rnb(address: str) -> dict | None:
         data = resp.json()
         if data.get("status") != "ok" or not data.get("results"):
             return None
-        rnb_id = data["results"][0].get("rnb_id")
-        if not rnb_id:
-            return None
 
-        resp2 = requests.get(
-            f"{RNB_API_URL}/{rnb_id}/", params={"plots": 1}, timeout=10,
-        )
-        resp2.raise_for_status()
-        building = resp2.json()
-        plots = building.get("plots") or []
-        if not plots:
-            return None
+        for batiment in data["results"]:
+            point = batiment.get("point") or {}
+            coords = point.get("coordinates")
+            if not coords or len(coords) != 2:
+                continue
+            lon_bat, lat_bat = coords[0], coords[1]
 
-        meilleur = max(plots, key=lambda pl: pl.get("bdg_cover_ratio") or 0)
-        plot_id = meilleur.get("id")
-        parsed = parse_id_parcelle(plot_id) if plot_id else None
-        if not parsed:
-            return None
+            # Priorité au test d'appartenance strict (point-in-polygon) —
+            # garantie la plus forte pour un point déjà précis comme celui
+            # d'un bâtiment. Repli sur les méthodes floues (Géoplateforme,
+            # périmètre) seulement si le test strict échoue.
+            parcelle_info = _point_exact_apicarto(lat_bat, lon_bat)
+            if not parcelle_info:
+                parcelle_info = get_parcelle_cadastrale(lat_bat, lon_bat)
 
-        ratio = meilleur.get("bdg_cover_ratio")
-        ratio_txt = f"{ratio:.0%}" if isinstance(ratio, (int, float)) else "inconnu"
-        parcelle = {
-            "id_parcelle": plot_id,
-            "code_insee": parsed["code_insee"],
-            "prefixe": parsed["prefixe"],
-            "section": parsed["section"],
-            "numero": parsed["numero"],
-            "contenance_m2": None,
-        }
-        return {
-            **parcelle, "nb_parcelles": 1, "parcelles": [parcelle],
-            "source": f"RNB (bâtiment identifié par adresse, recouvrement {ratio_txt})",
-        }
+            if parcelle_info and parcelle_info.get("nb_parcelles") == 1:
+                parcelle_info = dict(parcelle_info)
+                parcelle_info["source"] = (
+                    f"RNB (point du bâtiment {batiment.get('rnb_id')}) "
+                    f"+ {parcelle_info.get('source')}"
+                )
+                return parcelle_info
+        return None
     except Exception as exc:
         print(f"[warn] RNB échoué pour '{address}' : {exc}")
         return None
@@ -1369,6 +1363,42 @@ def _get_parcelle_via_geoplateforme(lat: float, lon: float) -> dict | None:
         }
     except Exception as exc:
         print(f"[warn] Géoplateforme (reverse parcel) échouée pour ({lat}, {lon}) : {exc}")
+        return None
+
+
+def _point_exact_apicarto(lat: float, lon: float) -> dict | None:
+    """
+    Requête ponctuelle exacte (point-in-polygon strict) via l'API Carto IGN.
+    Ne retourne un résultat que si le point tombe EXACTEMENT dans UNE SEULE
+    parcelle — un test d'appartenance strict, garantie plus forte qu'un
+    classement par proximité de centre (utilisé par la Géoplateforme), en
+    particulier pour un point déjà connu comme précis (ex. point d'un
+    bâtiment identifié via le RNB).
+    """
+    import requests, json
+
+    try:
+        resp = requests.get(
+            IGN_CADASTRE_URL,
+            params={"geom": json.dumps({"type": "Point", "coordinates": [lon, lat]})},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if len(features) != 1:
+            return None
+        p = features[0]["properties"]
+        parcelle = {
+            "id_parcelle": p.get("id"),
+            "code_insee": p.get("commune"),
+            "prefixe": p.get("prefixe"),
+            "section": p.get("section"),
+            "numero": p.get("numero"),
+            "contenance_m2": p.get("contenance"),
+        }
+        return {**parcelle, "nb_parcelles": 1, "parcelles": [parcelle], "source": "point exact (API Carto)"}
+    except Exception as exc:
+        print(f"[warn] API Carto (point exact) échouée pour ({lat}, {lon}) : {exc}")
         return None
 
 
