@@ -699,8 +699,22 @@ with tab_recherche:
                         )
                         tri_comparables = "date" if tri_label.startswith("Date") else "distance"
 
+                    # Si une sélection canonique unique existe déjà (venant de
+                    # "Historique probable" ou d'un choix précédent ici), on la
+                    # passe directement à la recherche : elle élargit alors
+                    # rayon/période spécifiquement pour CE type (comme le fait
+                    # "Historique probable"), au lieu de filtrer après coup un
+                    # petit échantillon tous-types-confondus qui peut ne
+                    # contenir aucun résultat du type recherché s'il est rare
+                    # localement.
+                    canon_avant_recherche = st.session_state.get("types_bien_selection", [])
+                    type_local_recherche = (
+                        canon_avant_recherche[0] if len(canon_avant_recherche) == 1 else None
+                    )
+
                     resultat_auto = core.find_comparables_auto(
                         active_dept, geo["latitude"], geo["longitude"],
+                        type_local=type_local_recherche,
                         radius_m=radius_comparables, since_years=since_years,
                         max_results=max_comparables, tri=tri_comparables,
                         cible_min=max_comparables,
@@ -709,6 +723,13 @@ with tab_recherche:
                     resume_comparables = resultat_auto["resume"]
                     radius_utilise = resultat_auto["radius_final"]
                     since_years_utilise = resultat_auto["since_years_final"]
+
+                    if type_local_recherche:
+                        st.caption(
+                            f"🎯 Recherche ciblée sur le type « {type_local_recherche} » "
+                            "(présélectionné depuis l'historique de cette adresse) — "
+                            "décochez le filtre ci-dessous pour élargir à tous les types."
+                        )
 
                     if comparables.empty:
                         comparables_filtres = comparables
