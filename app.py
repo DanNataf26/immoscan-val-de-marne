@@ -455,7 +455,7 @@ with tab_recherche:
                 "comparables indisponibles pour l'instant."
             )
         else:
-            st.subheader("Historique probable des ventes de ce bien précis")
+            st.subheader("Historique probable des ventes de cette adresse précise")
             try:
                 if st.session_state.get("history_cache_key") == geo["label"]:
                     history = st.session_state["history_cache_result"]
@@ -487,28 +487,50 @@ with tab_recherche:
 
                     if len(types_bien_adresse) > 1:
                         # Adresse mixte (ex. immeuble avec commerce + habitation) :
-                        # on demande à l'utilisateur quel type consulter, par défaut
-                        # le type de la vente exacte la plus récente.
-                        index_defaut = (
-                            types_bien_adresse.index(suggested_type)
-                            if suggested_type in types_bien_adresse else 0
-                        )
-                        type_bien_choisi = st.radio(
-                            "Plusieurs types de bien trouvés à cette adresse — "
-                            "lequel consulter ?",
-                            types_bien_adresse, index=index_defaut,
-                            horizontal=True, key="type_bien_historique",
-                        )
-                        history_affichee = history[
-                            history["type_local"].isna()
-                            | (history["type_local"] == type_bien_choisi)
+                        # on laisse choisir un, plusieurs, ou tous les types à
+                        # consulter. La sélection est partagée avec le filtre
+                        # "Type de bien" de "Ventes comparables" plus bas
+                        # (synchronisation dans les deux sens via la liste
+                        # "types_bien_selection" + callbacks on_change).
+                        if "types_bien_selection" not in st.session_state:
+                            st.session_state["types_bien_selection"] = (
+                                [suggested_type] if suggested_type in types_bien_adresse
+                                else [types_bien_adresse[0]]
+                            )
+                        # Si "Ventes comparables" a changé la sélection canonique
+                        # depuis le dernier rendu, on aligne l'état du widget
+                        # AVANT de l'instancier (restreint aux types réellement
+                        # présents à cette adresse).
+                        valeur_alignee = [
+                            t for t in st.session_state["types_bien_selection"]
+                            if t in types_bien_adresse
                         ]
-                        st.session_state["type_bien_adresse"] = type_bien_choisi
+                        if st.session_state.get("type_bien_historique_widget") != valeur_alignee:
+                            st.session_state["type_bien_historique_widget"] = valeur_alignee
+
+                        def _sync_depuis_historique():
+                            st.session_state["types_bien_selection"] = (
+                                st.session_state["type_bien_historique_widget"]
+                            )
+
+                        types_choisis_hist = st.multiselect(
+                            "Types de bien trouvés à cette adresse — lesquels "
+                            "consulter ? (aucun = tous)",
+                            types_bien_adresse,
+                            key="type_bien_historique_widget",
+                            on_change=_sync_depuis_historique,
+                        )
+                        if types_choisis_hist:
+                            history_affichee = history[
+                                history["type_local"].isna()
+                                | history["type_local"].isin(types_choisis_hist)
+                            ]
+                        else:
+                            history_affichee = history
                     else:
                         history_affichee = history
-                        st.session_state["type_bien_adresse"] = (
-                            types_bien_adresse[0] if types_bien_adresse else None
-                        )
+                        if types_bien_adresse:
+                            st.session_state["types_bien_selection"] = types_bien_adresse
 
                     st.dataframe(history_affichee, use_container_width=True)
                     st.caption(
@@ -697,13 +719,23 @@ with tab_recherche:
                         fc1, fc2, fc3 = st.columns(3)
                         with fc1:
                             types_dispo_filtre = sorted(comparables["type_local"].dropna().unique())
-                            type_bien_adresse = st.session_state.get("type_bien_adresse")
-                            defaut_type = (
-                                [type_bien_adresse]
-                                if type_bien_adresse in types_dispo_filtre else []
-                            )
+                            canon = st.session_state.get("types_bien_selection", [])
+                            defaut_type = [t for t in canon if t in types_dispo_filtre]
+                            # Si la sélection canonique (mise à jour côté "Historique
+                            # probable") a changé depuis le dernier rendu de ce
+                            # multiselect, on aligne son état AVANT de l'instancier.
+                            if st.session_state.get("type_bien_comparables_widget") != defaut_type:
+                                st.session_state["type_bien_comparables_widget"] = defaut_type
+
+                            def _sync_depuis_comparables():
+                                st.session_state["types_bien_selection"] = (
+                                    st.session_state["type_bien_comparables_widget"]
+                                )
+
                             types_choisis = st.multiselect(
                                 "Type de bien", types_dispo_filtre, default=defaut_type,
+                                key="type_bien_comparables_widget",
+                                on_change=_sync_depuis_comparables,
                             )
                         with fc2:
                             communes_dispo_filtre = sorted(comparables["nom_commune"].dropna().unique())
