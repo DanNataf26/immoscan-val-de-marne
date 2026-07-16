@@ -388,6 +388,12 @@ with st.sidebar.expander("🧪 Test API données foncières (Cerema)"):
         "Code INSEE de test", value="94028",
         help="Ex. 94028 = Créteil. Le code commune, pas le code postal.",
     )
+    page_size_test = st.slider(
+        "Taille de page demandée", 5, 50, 10,
+        help="Une commune entière sans pagination peut être lourde à générer "
+             "côté serveur — on demande volontairement peu de résultats pour "
+             "isoler si le problème vient de la taille de la requête.",
+    )
     col_test1, col_test2 = st.columns(2)
     with col_test1:
         tester_mutations = st.button("Tester /dvf_opendata/mutations/", use_container_width=True)
@@ -398,13 +404,13 @@ with st.sidebar.expander("🧪 Test API données foncières (Cerema)"):
         import requests
         if tester_mutations:
             url = "https://apidf-preprod.cerema.fr/dvf_opendata/mutations/"
-            params = {"code_insee": code_insee_test}
+            params = {"code_insee": code_insee_test, "page_size": page_size_test}
         else:
             url = "https://apidf-preprod.cerema.fr/indicateurs/dv3f/prix/annuel/"
-            params = {"code_insee": code_insee_test}
+            params = {"code_insee": code_insee_test, "page_size": page_size_test}
         try:
-            with st.spinner(f"Appel de {url} ..."):
-                reponse = requests.get(url, params=params, timeout=15)
+            with st.spinner(f"Appel de {url} (jusqu'à 45s)..."):
+                reponse = requests.get(url, params=params, timeout=45)
             st.write(f"Statut HTTP : {reponse.status_code}")
             st.write(f"URL appelée : {reponse.url}")
             try:
@@ -417,12 +423,22 @@ with st.sidebar.expander("🧪 Test API données foncières (Cerema)"):
                 resultats = data.get("results", data) if isinstance(data, dict) else data
                 if isinstance(resultats, list) and resultats:
                     st.success(f"{len(resultats)} résultat(s) sur cette page.")
+                    if isinstance(data, dict) and "count" in data:
+                        st.caption(f"Total disponible (toutes pages) : {data['count']}")
                     st.write("Colonnes (clés du premier résultat) :")
                     st.code(sorted(resultats[0].keys()))
                     st.dataframe(pd.DataFrame(resultats).head(20), use_container_width=True)
                 else:
                     st.warning("Réponse reçue mais vide ou de forme inattendue :")
                     st.json(data if not isinstance(data, list) else data[:5])
+        except requests.exceptions.Timeout:
+            st.error(
+                "⏱️ Toujours un timeout même avec une petite page et 45s "
+                "d'attente — ça pointe vers un problème de disponibilité/"
+                "performance du serveur lui-même, pas vers la taille de la "
+                "requête. Cohérent avec le statut 'bêta' et le taux de "
+                "disponibilité non communiqué de cette API."
+            )
         except requests.exceptions.RequestException as e:
             st.error(f"Échec de l'appel réseau : {e}")
 
