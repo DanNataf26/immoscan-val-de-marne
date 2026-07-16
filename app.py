@@ -702,7 +702,13 @@ with tab_recherche:
                             "Rayon", 100, 1000, 100, step=50, format="%d m",
                         )
                     with col_years:
-                        since_years = st.slider("Dernières N années", 1, 15, 5, step=1)
+                        since_years = st.slider(
+                            "Dernières N années", 1, 15, 5, step=1,
+                            help="Ne borne que le DVF récent (2021+). Le Cerema "
+                                 "DVF+ (2014-2020), quand disponible, est toujours "
+                                 "inclus intégralement — sa période est fixe et ne "
+                                 "recule pas avec ce curseur.",
+                        )
 
                     col_nb, col_tri = st.columns(2)
                     with col_nb:

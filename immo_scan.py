@@ -923,8 +923,13 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
     Si `include_cerema` est vrai et qu'un cache Cerema DVF+ existe pour ce
     département (2014-2020, importé manuellement — voir README), ses ventes
-    sont ajoutées en complément historique pour la même zone/période/type,
-    avec une colonne 'source' pour les distinguer.
+    sont ajoutées en complément historique pour la même zone/type, avec une
+    colonne 'source' pour les distinguer. `since_years` NE s'applique QU'au
+    DVF récent — Cerema couvre une période fixe et déjà close (2014-2020),
+    lui appliquer un filtre "depuis aujourd'hui" l'exclurait purement et
+    simplement dès que `since_years` est inférieur à l'écart (croissant
+    avec le temps) entre aujourd'hui et 2020, sans rapport avec l'intention
+    de l'utilisateur de voir cette période historique.
 
     `include_vefa` (faux par défaut) : les ventes en VEFA (état futur
     d'achèvement, neuf sur plan) sont exclues sauf activation explicite —
@@ -971,10 +976,14 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
             cerema = cerema.dropna(subset=["latitude", "longitude"]).copy()
             if type_local:
                 cerema = cerema[cerema["type_local"] == type_local]
-            if since_years:
-                seuil = pd.Timestamp(datetime.now()) - pd.DateOffset(years=since_years)
-                dates_c = pd.to_datetime(cerema["date_mutation"], errors="coerce")
-                cerema = cerema[dates_c >= seuil]
+            # Pas de seuil "depuis aujourd'hui" ici : Cerema DVF+ couvre une
+            # période fixe et déjà close (2014-2020, voir CEREMA_ANNEE_MAX).
+            # Lui appliquer le même filtre glissant que le DVF récent
+            # l'exclurait purement et simplement dès que `since_years` est
+            # inférieur à l'écart entre aujourd'hui et 2020 (ce qui ne fait
+            # que croître avec le temps) — sans lien avec l'intention de
+            # l'utilisateur, qui est de voir cette période historique quand
+            # elle est disponible. Le rayon et le type restent filtrés.
             if not cerema.empty:
                 frames.append(cerema)
 
