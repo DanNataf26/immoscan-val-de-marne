@@ -913,7 +913,8 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
                       radius_m: float = 500, max_results: int = 15,
                       since_years: int = 5, include_cerema: bool = True,
                       tri: str = "distance",
-                      include_vefa: bool = False) -> tuple[pd.DataFrame, dict]:
+                      include_vefa: bool = False,
+                      surface_reference: float | None = None) -> tuple[pd.DataFrame, dict]:
     """
     Cherche, dans le cache des transactions nettoyées, les ventes réelles les
     plus proches d'un point GPS donné, limitées aux `since_years` dernières
@@ -941,6 +942,13 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     Dans les deux cas, les résultats DVF et Cerema DVF+ restent mélangés
     dans un seul tableau trié globalement — ce n'est pas une lecture
     chronologique du quartier, seulement un classement selon le critère choisi.
+
+    `surface_reference` : si fourni (typiquement la surface du bien identifié
+    dans "Historique probable"), sert de critère de tri SUPPLÉMENTAIRE, après
+    la priorité de source et la distance — utile notamment quand plusieurs
+    lots d'un même immeuble partagent exactement la même distance (le DVF ne
+    géolocalise qu'au niveau de l'immeuble, pas du logement individuel), cas
+    où trier uniquement par distance ne permet pas de les départager.
 
     Retourne un tuple (DataFrame limité à `max_results` lignes selon le tri
     choisi, dict de synthèse sur l'ENSEMBLE des résultats trouvés avant
@@ -1019,7 +1027,19 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
         # récent est plus représentatif du marché actuel.
         proches_complet = proches_complet.copy()
         proches_complet["_cerema"] = proches_complet["source"].astype(str).str.startswith("Cerema")
-        proches = proches_complet.sort_values(["_cerema", "distance_m"]).drop(columns=["_cerema"])
+        # Écart de surface au bien de référence, en tri tertiaire : le DVF ne
+        # géolocalisant qu'au niveau de l'immeuble, plusieurs lots partagent
+        # souvent exactement la même distance (cas fréquent en copropriété) —
+        # sans ce critère, leur ordre entre eux serait arbitraire.
+        if surface_reference is not None and "surface_reelle_bati" in proches_complet.columns:
+            proches_complet["_ecart_surface"] = (
+                proches_complet["surface_reelle_bati"] - surface_reference
+            ).abs()
+        else:
+            proches_complet["_ecart_surface"] = 0
+        proches = proches_complet.sort_values(
+            ["_cerema", "distance_m", "_ecart_surface"]
+        ).drop(columns=["_cerema", "_ecart_surface"])
 
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
@@ -1056,7 +1076,8 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
                            radius_m: float = 100, since_years: int = 5,
                            max_results: int = 15, include_cerema: bool = True,
                            tri: str = "distance", cible_min: int = 15,
-                           include_vefa: bool = False) -> dict:
+                           include_vefa: bool = False,
+                           surface_reference: float | None = None) -> dict:
     """
     Comme `find_comparables`, mais élargit automatiquement la recherche si
     le nombre de résultats trouvés est inférieur à `cible_min` : d'abord le
@@ -1066,7 +1087,7 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
     épuisées — nombre de tentatives volontairement limité (4 paliers de
     rayon, 3 paliers d'années) pour rester rapide.
 
-    `include_vefa` (faux par défaut) : voir find_comparables().
+    `include_vefa`, `surface_reference` : voir find_comparables().
 
     L'élargissement se base sur le nombre de résultats **DVF (2021+/VEFA)**
     trouvés, PAS sur le total combiné avec Cerema DVF+ : sinon, un volume
@@ -1095,13 +1116,15 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
     radius_final = radius_m
     df, resume = find_comparables(dept, lat, lon, type_local, radius_m, max_results,
                                     since_years, include_cerema, tri,
-                                    include_vefa=include_vefa)
+                                    include_vefa=include_vefa,
+                                    surface_reference=surface_reference)
 
     if _nb_dvf(resume) < cible_min:
         for r in paliers_radius[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, r, max_results,
                                             since_years, include_cerema, tri,
-                                            include_vefa=include_vefa)
+                                            include_vefa=include_vefa,
+                                            surface_reference=surface_reference)
             radius_final = r
             if _nb_dvf(resume) >= cible_min:
                 break
@@ -1111,7 +1134,8 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
         for a in paliers_annees[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, radius_final, max_results,
                                             a, include_cerema, tri,
-                                            include_vefa=include_vefa)
+                                            include_vefa=include_vefa,
+                                            surface_reference=surface_reference)
             since_years_final = a
             if _nb_dvf(resume) >= cible_min:
                 break

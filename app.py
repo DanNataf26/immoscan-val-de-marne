@@ -541,6 +541,41 @@ with tab_recherche:
                         if types_bien_adresse:
                             st.session_state["types_bien_selection"] = types_bien_adresse
 
+                    # Une fois le type filtré, plusieurs lots peuvent encore
+                    # partager la même adresse (copropriété) — la surface est
+                    # en général le repère le plus fiable pour identifier son
+                    # propre bien parmi eux. Cette sélection sert aussi de
+                    # référence pour prioriser "Ventes comparables" plus bas.
+                    surfaces_dispo = []
+                    if "correspondance" in history_affichee.columns and "surface_reelle_bati" in history_affichee.columns:
+                        exact_pour_surface = history_affichee[
+                            history_affichee["correspondance"].str.startswith("Exacte")
+                        ]
+                        surfaces_dispo = sorted(
+                            exact_pour_surface["surface_reelle_bati"].dropna().unique()
+                        )
+
+                    if len(surfaces_dispo) > 1:
+                        surfaces_choisies = st.multiselect(
+                            "Plusieurs surfaces trouvées pour ce type à cette "
+                            "adresse — laquelle est la vôtre ? (aucune = toutes)",
+                            surfaces_dispo,
+                            key="surface_bien_historique_widget",
+                            format_func=lambda s: f"{s:.0f} m²",
+                        )
+                        if surfaces_choisies:
+                            history_affichee = history_affichee[
+                                history_affichee["surface_reelle_bati"].isna()
+                                | history_affichee["surface_reelle_bati"].isin(surfaces_choisies)
+                            ]
+                        st.session_state["surface_bien_selection"] = (
+                            surfaces_choisies[0] if len(surfaces_choisies) == 1 else None
+                        )
+                    elif len(surfaces_dispo) == 1:
+                        st.session_state["surface_bien_selection"] = surfaces_dispo[0]
+                    else:
+                        st.session_state["surface_bien_selection"] = None
+
                     st.dataframe(history_affichee, use_container_width=True)
                     st.caption(
                         "Filtré sur ce numéro + cette rue + cette commune "
@@ -746,6 +781,7 @@ with tab_recherche:
                 type_local_recherche = (
                     canon_avant_recherche[0] if len(canon_avant_recherche) == 1 else None
                 )
+                surface_recherche = st.session_state.get("surface_bien_selection")
 
                 resultat_auto = core.find_comparables_auto(
                     active_dept, geo["latitude"], geo["longitude"],
@@ -754,6 +790,7 @@ with tab_recherche:
                     max_results=max_comparables, tri=tri_comparables,
                     cible_min=max_comparables,
                     include_vefa=include_vefa_comparables,
+                    surface_reference=surface_recherche,
                 )
                 comparables = resultat_auto["df"]
                 resume_comparables = resultat_auto["resume"]
@@ -766,6 +803,13 @@ with tab_recherche:
                         "(présélectionné depuis l'historique de cette adresse) — "
                         "décochez le filtre dans la recherche ci-dessus pour "
                         "élargir à tous les types."
+                    )
+                if surface_recherche:
+                    st.caption(
+                        f"📐 Résultats triés en tenant compte de la surface de "
+                        f"votre bien ({surface_recherche:.0f} m², sélectionnée "
+                        "dans l'historique ci-dessus) pour départager les lots "
+                        "d'un même immeuble à distance égale."
                     )
 
                 if comparables.empty:
