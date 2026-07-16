@@ -142,10 +142,20 @@ def load_all(dept: str, years: list[int]) -> pd.DataFrame:
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie et calcule le prix au m² pour les ventes exploitables."""
-    df = df[df["nature_mutation"] == "Vente"].copy()
+    """Nettoie et calcule le prix au m² pour les ventes exploitables.
+
+    Les ventes en VEFA (état futur d'achèvement) sont incluses (pas
+    exclues comme avant) mais marquées via la colonne `vefa`, pour
+    permettre un affichage optionnel côté app.py (case à cocher) sans
+    fausser par défaut les statistiques de référence (voir run_reference,
+    qui exclut les VEFA du calcul prix médian/tendance). Adjudication et
+    Echange restent exclus (volumes marginaux, prix non représentatifs
+    du marché libre — vente sous contrainte ou troc sans prix de marché).
+    """
+    df = df[df["nature_mutation"].isin(["Vente", "Vente en l'état futur d'achèvement"])].copy()
     df = df[df["type_local"].isin(TYPES_RETENUS)]
     df = df[(df["valeur_fonciere"] > 10_000) & (df["surface_reelle_bati"] > 8)]
+    df["_vefa"] = df["nature_mutation"] == "Vente en l'état futur d'achèvement"
 
     # Détection (avant agrégation, tant que les lignes brutes existent
     # encore) des lignes strictement identiques au sein d'une même
@@ -174,6 +184,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
           .agg(surface_reelle_bati=("surface_reelle_bati", "sum"),
                nb_lots=("id_parcelle", "size"),
                doublon_suspect=("_doublon_suspect", "max"),
+               vefa=("_vefa", "max"),
                id_parcelle=("id_parcelle", "first"),
                adresse_nom_voie=("adresse_nom_voie", "first"),
                adresse_numero=("adresse_numero", "first"),
@@ -261,6 +272,7 @@ def reconstruct_buildings(agg: pd.DataFrame) -> tuple[pd.DataFrame, set]:
             "valeur_fonciere": valeur,
             "surface_reelle_bati": surface_totale,
             "nb_lots": int(nb_lots_total),
+            "vefa": bool(groupe["vefa"].any()),
             "id_parcelle": base["id_parcelle"],
             "adresse_nom_voie": base["adresse_nom_voie"],
             "adresse_numero": base["adresse_numero"],
@@ -409,8 +421,15 @@ def run_reference(dept: str, years: list[int]) -> None:
     agg_restante = agg_restante.drop(columns=["doublon_suspect"], errors="ignore")
     full = pd.concat([agg_restante, immeubles], ignore_index=True)
 
-    ref = build_reference(full)
-    trend = build_trend(full)
+    # Les statistiques de référence (prix médian/m² par commune+type, et
+    # leur tendance annuelle) servent au scoring et à la comparaison
+    # marché ailleurs dans l'appli — la prime "neuf" des VEFA les
+    # biaiserait vers le haut. On les exclut donc ICI, tout en les
+    # gardant dans `full` (transactions_nettoysees_{dept}.csv) pour un
+    # affichage optionnel côté app.py (case à cocher "Inclure les VEFA").
+    full_hors_vefa = full[~full["vefa"].fillna(False)]
+    ref = build_reference(full_hors_vefa)
+    trend = build_trend(full_hors_vefa)
 
     ref_path = OUTPUT_DIR / f"reference_{dept}.csv"
     trend_path = OUTPUT_DIR / f"tendance_{dept}.csv"
@@ -891,7 +910,8 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
 def find_comparables(dept: str, lat: float, lon: float, type_local: str | None = None,
                       radius_m: float = 500, max_results: int = 15,
                       since_years: int = 5, include_cerema: bool = True,
-                      tri: str = "distance") -> tuple[pd.DataFrame, dict]:
+                      tri: str = "distance",
+                      include_vefa: bool = False) -> tuple[pd.DataFrame, dict]:
     """
     Cherche, dans le cache des transactions nettoyées, les ventes réelles les
     plus proches d'un point GPS donné, limitées aux `since_years` dernières
@@ -903,6 +923,11 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     département (2014-2020, importé manuellement — voir README), ses ventes
     sont ajoutées en complément historique pour la même zone/période/type,
     avec une colonne 'source' pour les distinguer.
+
+    `include_vefa` (faux par défaut) : les ventes en VEFA (état futur
+    d'achèvement, neuf sur plan) sont exclues sauf activation explicite —
+    leur prix inclut une prime "neuf" qui n'est pas directement comparable
+    à une revente ancienne. Voir clean()/run_reference() pour le détail.
 
     `tri` détermine l'ordre du tableau retourné : "distance" (les plus
     proches en premier, par défaut) ou "date" (les plus récentes en premier).
@@ -922,7 +947,12 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
     df = pd.read_csv(cache_path)
     df = df.dropna(subset=["latitude", "longitude"])
-    df["source"] = "DVF (2021+)"
+    if "vefa" in df.columns:
+        if not include_vefa:
+            df = df[~df["vefa"].fillna(False)]
+        df["source"] = df["vefa"].fillna(False).map({True: "DVF (VEFA)", False: "DVF (2021+)"})
+    else:
+        df["source"] = "DVF (2021+)"
     if type_local:
         df = df[df["type_local"] == type_local]
 
@@ -1002,7 +1032,8 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | None = None,
                            radius_m: float = 100, since_years: int = 5,
                            max_results: int = 15, include_cerema: bool = True,
-                           tri: str = "distance", cible_min: int = 15) -> dict:
+                           tri: str = "distance", cible_min: int = 15,
+                           include_vefa: bool = False) -> dict:
     """
     Comme `find_comparables`, mais élargit automatiquement la recherche si
     le nombre de résultats trouvés est inférieur à `cible_min` : d'abord le
@@ -1011,6 +1042,8 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
     la cible est atteinte ou que les deux limites (1000m/15 ans) sont
     épuisées — nombre de tentatives volontairement limité (4 paliers de
     rayon, 3 paliers d'années) pour rester rapide.
+
+    `include_vefa` (faux par défaut) : voir find_comparables().
 
     Retourne un dict : {df, resume, radius_final, since_years_final, elargi}
     — `elargi` indique si les paramètres initiaux ont dû être dépassés,
@@ -1023,12 +1056,14 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
 
     radius_final = radius_m
     df, resume = find_comparables(dept, lat, lon, type_local, radius_m, max_results,
-                                    since_years, include_cerema, tri)
+                                    since_years, include_cerema, tri,
+                                    include_vefa=include_vefa)
 
     if resume["total"] < cible_min:
         for r in paliers_radius[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, r, max_results,
-                                            since_years, include_cerema, tri)
+                                            since_years, include_cerema, tri,
+                                            include_vefa=include_vefa)
             radius_final = r
             if resume["total"] >= cible_min:
                 break
@@ -1037,7 +1072,8 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
     if resume["total"] < cible_min:
         for a in paliers_annees[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, radius_final, max_results,
-                                            a, include_cerema, tri)
+                                            a, include_cerema, tri,
+                                            include_vefa=include_vefa)
             since_years_final = a
             if resume["total"] >= cible_min:
                 break
@@ -1078,7 +1114,8 @@ def _parse_address_number_street(address: str) -> tuple[str, str]:
 
 def find_property_history(dept: str, address: str, lat: float, lon: float,
                           commune: str | None = None, max_results: int = 30,
-                          code_insee: str | None = None) -> pd.DataFrame:
+                          code_insee: str | None = None,
+                          include_vefa: bool = False) -> pd.DataFrame:
     """
     Récupère l'historique DVF du bien précis recherché (ce numéro, cette rue,
     cette commune), sur TOUTE la période chargée en cache (pas de limite de
@@ -1098,6 +1135,8 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     sont montrées peu fiables sur ce champ précis en conditions réelles
     (absent ou tronqué selon les services).
 
+    `include_vefa` (faux par défaut) : voir find_comparables().
+
     Si aucune correspondance exacte n'est trouvée, un repli de proximité très
     étroit (30 m) est tenté et clairement signalé comme approximatif.
     """
@@ -1106,6 +1145,8 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
         raise SystemExit(f"Cache introuvable ({cache_path}). Lancez 'reference' d'abord.")
 
     df = pd.read_csv(cache_path)
+    if "vefa" in df.columns and not include_vefa:
+        df = df[~df["vefa"].fillna(False)]
     if df.empty:
         return pd.DataFrame()
 
@@ -1152,7 +1193,10 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
 
     exact = df[mask].copy()
     exact["correspondance"] = "Exacte (numéro + rue + commune)"
-    exact["source"] = "DVF (2021+)"
+    if "vefa" in exact.columns:
+        exact["source"] = exact["vefa"].fillna(False).map({True: "DVF (VEFA)", False: "DVF (2021+)"})
+    else:
+        exact["source"] = "DVF (2021+)"
 
     result = exact
     if not result.empty and "id_parcelle" in result.columns:
@@ -1235,7 +1279,10 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
             )
             proche = df2[df2["distance_m"] <= 30].copy()
             proche["correspondance"] = "Approximative (proximité < 30 m, adresse non confirmée)"
-            proche["source"] = "DVF (2021+)"
+            if "vefa" in proche.columns:
+                proche["source"] = proche["vefa"].fillna(False).map({True: "DVF (VEFA)", False: "DVF (2021+)"})
+            else:
+                proche["source"] = "DVF (2021+)"
             result = proche
 
     if result.empty:

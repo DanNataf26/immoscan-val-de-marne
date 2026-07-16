@@ -456,16 +456,24 @@ with tab_recherche:
             )
         else:
             st.subheader("Historique probable des ventes de cette adresse précise")
+            include_vefa_historique = st.checkbox(
+                "Inclure les ventes en VEFA (neuf sur plan)", value=False,
+                key="include_vefa_historique",
+                help="Prix incluant une prime 'neuf' (TVA, garanties constructeur), "
+                     "pas directement comparable à une revente ancienne — exclu par défaut.",
+            )
             try:
-                if st.session_state.get("history_cache_key") == geo["label"]:
+                cache_key_historique = (geo["label"], include_vefa_historique)
+                if st.session_state.get("history_cache_key") == cache_key_historique:
                     history = st.session_state["history_cache_result"]
                 else:
                     with st.spinner("Recherche de l'historique (et, si besoin, du cadastre)..."):
                         history = core.find_property_history(
                             active_dept, geo["label"], geo["latitude"], geo["longitude"],
                             commune=geo.get("commune"), code_insee=geo.get("code_insee"),
+                            include_vefa=include_vefa_historique,
                         )
-                    st.session_state["history_cache_key"] = geo["label"]
+                    st.session_state["history_cache_key"] = cache_key_historique
                     st.session_state["history_cache_result"] = history
                 if history.empty:
                     st.caption(
@@ -699,6 +707,13 @@ with tab_recherche:
                         )
                         tri_comparables = "date" if tri_label.startswith("Date") else "distance"
 
+                    include_vefa_comparables = st.checkbox(
+                        "Inclure les ventes en VEFA (neuf sur plan)", value=False,
+                        key="include_vefa_comparables",
+                        help="Prix incluant une prime 'neuf' (TVA, garanties constructeur), "
+                             "pas directement comparable à une revente ancienne — exclu par défaut.",
+                    )
+
                     # Si une sélection canonique unique existe déjà (venant de
                     # "Historique probable" ou d'un choix précédent ici), on la
                     # passe directement à la recherche : elle élargit alors
@@ -718,6 +733,7 @@ with tab_recherche:
                         radius_m=radius_comparables, since_years=since_years,
                         max_results=max_comparables, tri=tri_comparables,
                         cible_min=max_comparables,
+                        include_vefa=include_vefa_comparables,
                     )
                     comparables = resultat_auto["df"]
                     resume_comparables = resultat_auto["resume"]
