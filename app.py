@@ -376,6 +376,56 @@ st.sidebar.caption(
     "Sa référence sera alors préparée automatiquement à son tour."
 )
 
+st.sidebar.divider()
+with st.sidebar.expander("🧪 Test API données foncières (Cerema)"):
+    st.caption(
+        "Panneau de test exploratoire — appelle en direct l'API DVF+ "
+        "open-data du Cerema (apidf-preprod.cerema.fr) pour évaluer si elle "
+        "pourrait remplacer tout ou partie du pipeline DVF 2021+ actuel. "
+        "N'affecte rien d'autre dans l'appli."
+    )
+    code_insee_test = st.text_input(
+        "Code INSEE de test", value="94028",
+        help="Ex. 94028 = Créteil. Le code commune, pas le code postal.",
+    )
+    col_test1, col_test2 = st.columns(2)
+    with col_test1:
+        tester_mutations = st.button("Tester /dvf_opendata/mutations/", use_container_width=True)
+    with col_test2:
+        tester_indicateurs = st.button("Tester /indicateurs/dv3f/prix/annuel/", use_container_width=True)
+
+    if tester_mutations or tester_indicateurs:
+        import requests
+        if tester_mutations:
+            url = "https://apidf-preprod.cerema.fr/dvf_opendata/mutations/"
+            params = {"code_insee": code_insee_test}
+        else:
+            url = "https://apidf-preprod.cerema.fr/indicateurs/dv3f/prix/annuel/"
+            params = {"code_insee": code_insee_test}
+        try:
+            with st.spinner(f"Appel de {url} ..."):
+                reponse = requests.get(url, params=params, timeout=15)
+            st.write(f"Statut HTTP : {reponse.status_code}")
+            st.write(f"URL appelée : {reponse.url}")
+            try:
+                data = reponse.json()
+            except ValueError:
+                st.error("Réponse non-JSON reçue :")
+                st.code(reponse.text[:2000])
+                data = None
+            if data is not None:
+                resultats = data.get("results", data) if isinstance(data, dict) else data
+                if isinstance(resultats, list) and resultats:
+                    st.success(f"{len(resultats)} résultat(s) sur cette page.")
+                    st.write("Colonnes (clés du premier résultat) :")
+                    st.code(sorted(resultats[0].keys()))
+                    st.dataframe(pd.DataFrame(resultats).head(20), use_container_width=True)
+                else:
+                    st.warning("Réponse reçue mais vide ou de forme inattendue :")
+                    st.json(data if not isinstance(data, list) else data[:5])
+        except requests.exceptions.RequestException as e:
+            st.error(f"Échec de l'appel réseau : {e}")
+
 st.title("ImmoScan — France entière")
 st.caption("Détection d'opportunités immobilières à partir des transactions réelles DVF, avec historique probable du bien et vues géographiques.")
 
