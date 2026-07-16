@@ -376,72 +376,6 @@ st.sidebar.caption(
     "Sa référence sera alors préparée automatiquement à son tour."
 )
 
-st.sidebar.divider()
-with st.sidebar.expander("🧪 Test API données foncières (Cerema)"):
-    st.caption(
-        "Panneau de test exploratoire — appelle en direct l'API DVF+ "
-        "open-data du Cerema (apidf-preprod.cerema.fr) pour évaluer si elle "
-        "pourrait remplacer tout ou partie du pipeline DVF 2021+ actuel. "
-        "N'affecte rien d'autre dans l'appli."
-    )
-    code_insee_test = st.text_input(
-        "Code INSEE de test", value="94028",
-        help="Ex. 94028 = Créteil. Le code commune, pas le code postal.",
-    )
-    page_size_test = st.slider(
-        "Taille de page demandée", 5, 50, 10,
-        help="Une commune entière sans pagination peut être lourde à générer "
-             "côté serveur — on demande volontairement peu de résultats pour "
-             "isoler si le problème vient de la taille de la requête.",
-    )
-    col_test1, col_test2 = st.columns(2)
-    with col_test1:
-        tester_mutations = st.button("Tester /dvf_opendata/mutations/", use_container_width=True)
-    with col_test2:
-        tester_indicateurs = st.button("Tester /indicateurs/dv3f/prix/annuel/", use_container_width=True)
-
-    if tester_mutations or tester_indicateurs:
-        import requests
-        if tester_mutations:
-            url = "https://apidf-preprod.cerema.fr/dvf_opendata/mutations/"
-            params = {"code_insee": code_insee_test, "page_size": page_size_test}
-        else:
-            url = "https://apidf-preprod.cerema.fr/indicateurs/dv3f/prix/annuel/"
-            params = {"code_insee": code_insee_test, "page_size": page_size_test}
-        try:
-            with st.spinner(f"Appel de {url} (jusqu'à 45s)..."):
-                reponse = requests.get(url, params=params, timeout=45)
-            st.write(f"Statut HTTP : {reponse.status_code}")
-            st.write(f"URL appelée : {reponse.url}")
-            try:
-                data = reponse.json()
-            except ValueError:
-                st.error("Réponse non-JSON reçue :")
-                st.code(reponse.text[:2000])
-                data = None
-            if data is not None:
-                resultats = data.get("results", data) if isinstance(data, dict) else data
-                if isinstance(resultats, list) and resultats:
-                    st.success(f"{len(resultats)} résultat(s) sur cette page.")
-                    if isinstance(data, dict) and "count" in data:
-                        st.caption(f"Total disponible (toutes pages) : {data['count']}")
-                    st.write("Colonnes (clés du premier résultat) :")
-                    st.code(sorted(resultats[0].keys()))
-                    st.dataframe(pd.DataFrame(resultats).head(20), use_container_width=True)
-                else:
-                    st.warning("Réponse reçue mais vide ou de forme inattendue :")
-                    st.json(data if not isinstance(data, list) else data[:5])
-        except requests.exceptions.Timeout:
-            st.error(
-                "⏱️ Toujours un timeout même avec une petite page et 45s "
-                "d'attente — ça pointe vers un problème de disponibilité/"
-                "performance du serveur lui-même, pas vers la taille de la "
-                "requête. Cohérent avec le statut 'bêta' et le taux de "
-                "disponibilité non communiqué de cette API."
-            )
-        except requests.exceptions.RequestException as e:
-            st.error(f"Échec de l'appel réseau : {e}")
-
 st.title("ImmoScan — France entière")
 st.caption("Détection d'opportunités immobilières à partir des transactions réelles DVF, avec historique probable du bien et vues géographiques.")
 
@@ -483,7 +417,13 @@ with tab_recherche:
             st.success(f"📍 Adresse active : {geo['label']}")
         with col_reset:
             if st.button("🔄 Nouvelle recherche"):
-                for k in ("adresse_confirmee", "history_cache_key", "history_cache_result"):
+                for k in (
+                    "adresse_confirmee", "adresse_component",
+                    "history_cache_key", "history_cache_result",
+                    "types_bien_selection", "type_bien_historique_widget",
+                    "type_bien_comparables_widget",
+                    "surface_bien_selection", "surface_bien_historique_widget",
+                ):
                     st.session_state.pop(k, None)
                 st.rerun()
 
@@ -496,12 +436,23 @@ with tab_recherche:
 
         map_placeholder = st.container()
 
-        if detected_dept != dept:
-            st.warning(
-                f"Cette adresse semble être dans le département {detected_dept}, "
-                f"alors que la barre latérale est sur {dept}. Sélectionnez "
-                f"{detected_dept} dans la barre latérale pour que sa référence "
-                "se prépare automatiquement."
+        if detected_dept != dept and not core.reference_is_up_to_date(detected_dept, annees):
+            with st.status(
+                f"Cette adresse est dans le département {detected_dept} — "
+                "préparation automatique de ses données...", expanded=True
+            ) as status_box:
+                try:
+                    core.prepare_data_if_needed(detected_dept, annees, progress_callback=status_box.write)
+                    load_reference.clear()
+                    status_box.update(label="✅ Données prêtes", state="complete")
+                except SystemExit as e:
+                    status_box.update(label="Erreur lors de la préparation", state="error")
+                    st.error(str(e))
+        elif detected_dept != dept:
+            st.info(
+                f"📍 Cette adresse est dans le département {detected_dept} "
+                f"(différent du {dept} sélectionné en barre latérale) — sa "
+                "référence est déjà prête et utilisée automatiquement."
             )
 
         active_dept = detected_dept if reference_exists(detected_dept) else dept
