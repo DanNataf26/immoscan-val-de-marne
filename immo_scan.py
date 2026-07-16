@@ -147,6 +147,18 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["type_local"].isin(TYPES_RETENUS)]
     df = df[(df["valeur_fonciere"] > 10_000) & (df["surface_reelle_bati"] > 8)]
 
+    # Détection (avant agrégation, tant que les lignes brutes existent
+    # encore) des lignes strictement identiques au sein d'une même
+    # mutation+type — signal à faible fiabilité (le format geo-dvf ne
+    # permet pas de distinguer avec certitude "co-acquéreurs" de "lots
+    # réellement identiques"), mais utile comme avertissement pour les
+    # petites mutations. Voir reconstruct_buildings() pour l'usage.
+    compte_surface = df.groupby(
+        ["id_mutation", "type_local", "surface_reelle_bati"]
+    )["surface_reelle_bati"].transform("size")
+    compte_type = df.groupby(["id_mutation", "type_local"])["surface_reelle_bati"].transform("size")
+    df["_doublon_suspect"] = (compte_surface > 1) & (compte_type <= 4)
+
     # Une même mutation peut apparaître sur plusieurs lignes (dépendances,
     # plusieurs lots). On agrège au niveau de la mutation pour ne pas
     # sur-pondérer les biens à lots multiples dans le calcul du prix/m².
@@ -161,6 +173,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
                     as_index=False)
           .agg(surface_reelle_bati=("surface_reelle_bati", "sum"),
                nb_lots=("id_parcelle", "size"),
+               doublon_suspect=("_doublon_suspect", "max"),
                id_parcelle=("id_parcelle", "first"),
                adresse_nom_voie=("adresse_nom_voie", "first"),
                adresse_numero=("adresse_numero", "first"),
@@ -221,6 +234,22 @@ def reconstruct_buildings(agg: pd.DataFrame) -> tuple[pd.DataFrame, set]:
             f"{int(r.nb_lots)} {r.type_local} ({r.surface_reelle_bati:.0f} m²)"
             for r in groupe.itertuples()
         )
+        # Alerte non-bloquante : des lignes DVF strictement identiques (même
+        # type + même surface) dans une mutation peuvent signifier soit
+        # plusieurs biens réellement identiques (fréquent dans les grands
+        # ensembles à plans-types répétés), soit un seul bien dupliqué à
+        # cause de plusieurs co-acquéreurs (indivision) — le format geo-dvf
+        # public ne permet pas de trancher avec certitude entre les deux.
+        # On ne modifie donc PAS le calcul : on signale juste le doute
+        # (voir clean() pour le calcul de doublon_suspect, fait AVANT
+        # l'agrégation par type pendant que les lignes brutes existent
+        # encore).
+        if "doublon_suspect" in groupe.columns and groupe["doublon_suspect"].any():
+            composition += (
+                " — ⚠️ lignes identiques détectées : peut-être un seul bien "
+                "avec plusieurs co-acquéreurs plutôt que des lots distincts, "
+                "à vérifier sur l'acte"
+            )
         lignes.append({
             "id_mutation": id_mut,
             "date_mutation": base["date_mutation"],
@@ -377,6 +406,7 @@ def run_reference(dept: str, years: list[int]) -> None:
     agg = clean(df)
     immeubles, ids_reconstruits = reconstruct_buildings(agg)
     agg_restante = agg[~agg["id_mutation"].isin(ids_reconstruits)]
+    agg_restante = agg_restante.drop(columns=["doublon_suspect"], errors="ignore")
     full = pd.concat([agg_restante, immeubles], ignore_index=True)
 
     ref = build_reference(full)
