@@ -801,19 +801,22 @@ with tab_recherche:
                         def _pas_lisible(etendue):
                             """Choisit un pas d'arrondi 'joli' (1/2/5 x 10^n) adapté
                             à l'étendue d'une plage, pour des bornes de slider
-                            lisibles plutôt que des décimales brutes."""
+                            lisibles plutôt que des décimales brutes. Retourne un
+                            float : st.slider exige que min/max/value/step soient
+                            tous du même type, et ces plages sont par nature des
+                            prix/surfaces décimaux."""
                             if etendue <= 0:
-                                return 1
+                                return 1.0
                             magnitude = 10 ** math.floor(math.log10(etendue))
                             for mult in (1, 2, 5, 10):
                                 if etendue / (magnitude * mult) <= 20:
-                                    return magnitude * mult
-                            return magnitude * 10
+                                    return float(magnitude * mult)
+                            return float(magnitude * 10)
 
                         def _bornes_arrondies(vmin, vmax):
                             pas = _pas_lisible(vmax - vmin)
-                            bas = math.floor(vmin / pas) * pas
-                            haut = math.ceil(vmax / pas) * pas
+                            bas = float(math.floor(vmin / pas) * pas)
+                            haut = float(math.ceil(vmax / pas) * pas)
                             if haut <= bas:
                                 haut = bas + pas
                             return bas, haut, pas
