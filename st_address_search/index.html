@@ -70,6 +70,18 @@
   });
   _sendMessage(COMPONENT_READY, { apiVersion: 1 });
   window.addEventListener("load", () => window.setTimeout(setFrameHeight, 0));
+  window.addEventListener("resize", setFrameHeight);
+
+  // Filet de sécurité : les appels explicites à setFrameHeight() ci-dessous
+  // couvrent les cas prévus (saisie, résultats, sélection), mais un cas non
+  // anticipé (rendu différent d'un navigateur/webview mobile, clavier
+  // virtuel modifiant la mise en page, etc.) pourrait laisser le cadre à
+  // une taille périmée. Un MutationObserver réagit à TOUT changement du DOM
+  // du composant, quelle qu'en soit la cause, sans avoir à les énumérer.
+  new MutationObserver(() => setFrameHeight()).observe(
+    document.getElementById("wrapper"),
+    { childList: true, subtree: true, characterData: true }
+  );
 
   const input = document.getElementById("addr-input");
   const suggestionsDiv = document.getElementById("suggestions");
