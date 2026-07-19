@@ -1138,31 +1138,53 @@ with tab_recherche:
                     use_container_width=True,
                 )
         else:
-            dpe_classe = core.interpret_dpe_classe(dpe)
-            if dpe_classe and dpe_classe.get("classe_energie"):
+            dpe_par_logement = core.interpret_dpe_par_logement(dpe)
+            if dpe_par_logement:
                 DPE_COULEURS = {
                     "A": "#00A652", "B": "#51B848", "C": "#CBDB2A",
                     "D": "#FFF200", "E": "#FCB040", "F": "#F26522", "G": "#ED1C24",
                 }
-                lettre = dpe_classe["classe_energie"]
-                couleur = DPE_COULEURS.get(lettre, "#999999")
-                col_badge, col_texte = st.columns([1, 3])
-                with col_badge:
-                    st.markdown(
-                        f"""
-                        <div style="background:{couleur}; color:white; font-weight:bold;
-                                    font-size:2.5rem; text-align:center; border-radius:10px;
-                                    padding:0.5rem 0; width:100%;">
-                            {lettre}
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
+                if len(dpe_par_logement) > 1:
+                    st.info(
+                        f"🏢 {len(dpe_par_logement)} DPE trouvés pour cette adresse — "
+                        "normal dans un immeuble collectif (un DPE par logement en "
+                        "général) : la lettre peut différer d'un appartement à "
+                        "l'autre. Aucun moyen de savoir automatiquement lequel "
+                        "correspond au bien recherché sans indication d'étage/lot."
                     )
-                    st.caption("Classe énergie")
-                with col_texte:
-                    if dpe_classe.get("classe_ges"):
-                        st.write(f"**GES :** classe {dpe_classe['classe_ges']}")
-                    st.write(dpe_classe["note"])
+                for i, entree in enumerate(dpe_par_logement):
+                    lettre = entree["classe_energie"]
+                    couleur = DPE_COULEURS.get(lettre, "#999999")
+                    col_badge, col_texte = st.columns([1, 3])
+                    with col_badge:
+                        st.markdown(
+                            f"""
+                            <div style="background:{couleur}; color:white; font-weight:bold;
+                                        font-size:2rem; text-align:center; border-radius:10px;
+                                        padding:0.4rem 0; width:100%;">
+                                {lettre}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        st.caption("Classe énergie")
+                    with col_texte:
+                        if entree.get("classe_ges"):
+                            st.write(f"**GES :** classe {entree['classe_ges']}")
+                        if entree.get("date_dpe"):
+                            st.write(f"**Date du DPE :** {entree['date_dpe']}")
+                        if entree.get("distinction"):
+                            details_txt = ", ".join(
+                                f"**{k}** : {v}" for k, v in entree["distinction"].items()
+                            )
+                            st.write(details_txt)
+                        else:
+                            st.caption(
+                                "Aucune indication de lot/étage disponible pour "
+                                "distinguer ce logement des autres."
+                            )
+                    if i < len(dpe_par_logement) - 1:
+                        st.divider()
                 st.write("")
             st.dataframe(dpe, use_container_width=True)
             st.caption(

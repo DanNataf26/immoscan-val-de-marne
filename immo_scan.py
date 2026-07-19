@@ -1991,6 +1991,69 @@ def interpret_dpe_classe(dpe: pd.DataFrame | None) -> dict | None:
     return {"classe_energie": classe_energie, "classe_ges": classe_ges, "note": note}
 
 
+def interpret_dpe_par_logement(dpe: pd.DataFrame | None) -> list[dict]:
+    """
+    Comme interpret_dpe_classe(), mais renvoie UNE entrée par ligne du
+    tableau DPE plutôt que de résumer sur la seule première ligne — une
+    correspondance numéro+rue peut légitimement remonter plusieurs DPE
+    distincts (un immeuble collectif a en général un DPE par logement, pas
+    un DPE unique pour tout le bâtiment). Présenter une seule lettre pour
+    l'ensemble laisserait croire à tort qu'elle s'applique à tout le
+    bâtiment.
+
+    Essaie aussi de repérer, parmi les colonnes disponibles, tout champ
+    permettant de distinguer les logements entre eux (étage, complément
+    d'adresse, cage d'escalier...) — noms de colonnes non garantis stables
+    dans le temps côté ADEME, d'où une recherche par mot-clé plutôt qu'un
+    nom de colonne unique supposé figé.
+    """
+    if dpe is None or dpe.empty:
+        return []
+
+    candidats_energie = ["etiquette_dpe", "classe_consommation_energie", "etiquette_dpe_final"]
+    candidats_ges = ["etiquette_ges", "classe_estimation_ges", "etiquette_ges_final"]
+    candidats_date = ["date_etablissement_dpe", "date_reception_dpe", "date_visite_diagnostiqueur"]
+    MOTS_CLES_DISTINCTION = [
+        "complement", "etage", "appartement", "logement", "cage",
+        "escalier", "porte", "batiment", "lot",
+    ]
+    colonnes_distinction = [
+        c for c in dpe.columns
+        if any(mot in c.lower() for mot in MOTS_CLES_DISTINCTION)
+        and c not in ("nombre_appartement",)  # champ agrégat, pas un identifiant de lot
+    ]
+
+    entrees = []
+    for _, row in dpe.iterrows():
+        classe_energie = next(
+            (str(row[c]).upper().strip() for c in candidats_energie
+             if c in dpe.columns and pd.notna(row.get(c))),
+            None,
+        )
+        if classe_energie is None:
+            continue
+        classe_ges = next(
+            (str(row[c]).upper().strip() for c in candidats_ges
+             if c in dpe.columns and pd.notna(row.get(c))),
+            None,
+        )
+        date_dpe = next(
+            (row[c] for c in candidats_date if c in dpe.columns and pd.notna(row.get(c))),
+            None,
+        )
+        distinction = {
+            c: row[c] for c in colonnes_distinction
+            if pd.notna(row.get(c)) and str(row[c]).strip() not in ("", "0")
+        }
+        entrees.append({
+            "classe_energie": classe_energie,
+            "classe_ges": classe_ges,
+            "date_dpe": date_dpe,
+            "distinction": distinction,
+        })
+    return entrees
+
+
 BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
 
 
