@@ -1097,9 +1097,13 @@ with tab_recherche:
                     "réponse de l'API plutôt que de continuer à deviner."
                 )
                 import requests as _requests_diag
+                import json as _json_diag
+                import math as _math_diag
+
+                _rapport_bdnb = [f"Adresse : {geo['label']}", ""]
+
                 url_diag = core.BDNB_API_URL
                 d_lat = 40 / 111_320
-                import math as _math_diag
                 d_lon = 40 / (111_320 * max(_math_diag.cos(_math_diag.radians(geo["latitude"])), 0.1))
                 bbox_diag = (
                     f"{geo['longitude'] - d_lon},{geo['latitude'] - d_lat},"
@@ -1107,26 +1111,43 @@ with tab_recherche:
                 )
                 st.write(f"URL : {url_diag}")
                 st.write(f"Paramètre bbox : {bbox_diag}")
+                _rapport_bdnb += [
+                    "--- Essai 1 : endpoint /bbox ---",
+                    f"URL : {url_diag}",
+                    f"Paramètre bbox : {bbox_diag}",
+                ]
                 try:
                     reponse_diag = _requests_diag.get(
                         url_diag, params={"bbox": bbox_diag}, timeout=15
                     )
                     st.write(f"Statut HTTP : {reponse_diag.status_code}")
                     st.write(f"URL réellement appelée : {reponse_diag.url}")
+                    _rapport_bdnb += [
+                        f"Statut HTTP : {reponse_diag.status_code}",
+                        f"URL réellement appelée : {reponse_diag.url}",
+                    ]
                     try:
                         data_diag = reponse_diag.json()
                         if isinstance(data_diag, list) and data_diag:
                             st.write("Champs disponibles (premier résultat) :")
                             st.code(sorted(data_diag[0].keys()))
                             st.json(data_diag[0])
+                            _rapport_bdnb.append("Champs disponibles (premier résultat) :")
+                            _rapport_bdnb.append(str(sorted(data_diag[0].keys())))
+                            _rapport_bdnb.append(_json_diag.dumps(data_diag[0], ensure_ascii=False, indent=2))
                         else:
                             st.warning("Réponse vide ou de forme inattendue :")
                             st.json(data_diag)
+                            _rapport_bdnb.append("Réponse vide ou de forme inattendue :")
+                            _rapport_bdnb.append(_json_diag.dumps(data_diag, ensure_ascii=False, indent=2))
                     except ValueError:
                         st.error("Réponse non-JSON :")
                         st.code(reponse_diag.text[:2000])
+                        _rapport_bdnb.append("Réponse non-JSON :")
+                        _rapport_bdnb.append(reponse_diag.text[:2000])
                 except _requests_diag.exceptions.RequestException as e:
                     st.error(f"Échec de l'appel réseau : {e}")
+                    _rapport_bdnb.append(f"Échec de l'appel réseau : {e}")
 
                 st.divider()
                 st.caption(
@@ -1136,6 +1157,7 @@ with tab_recherche:
                     "directement, sans filtre géographique, juste pour voir "
                     "les vrais noms de colonnes de ce millésime."
                 )
+                _rapport_bdnb += ["", "--- Essai 2 : table de base, sans filtre géographique ---"]
                 url_diag2 = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
                 try:
                     reponse_diag2 = _requests_diag.get(
@@ -1143,20 +1165,43 @@ with tab_recherche:
                     )
                     st.write(f"Statut HTTP : {reponse_diag2.status_code}")
                     st.write(f"URL réellement appelée : {reponse_diag2.url}")
+                    _rapport_bdnb += [
+                        f"Statut HTTP : {reponse_diag2.status_code}",
+                        f"URL réellement appelée : {reponse_diag2.url}",
+                    ]
                     try:
                         data_diag2 = reponse_diag2.json()
                         if isinstance(data_diag2, list) and data_diag2:
                             st.write("Champs disponibles (premier résultat) :")
                             st.code(sorted(data_diag2[0].keys()))
                             st.json(data_diag2[0])
+                            _rapport_bdnb.append("Champs disponibles (premier résultat) :")
+                            _rapport_bdnb.append(str(sorted(data_diag2[0].keys())))
+                            _rapport_bdnb.append(_json_diag.dumps(data_diag2[0], ensure_ascii=False, indent=2))
                         else:
                             st.warning("Réponse vide ou de forme inattendue :")
                             st.json(data_diag2)
+                            _rapport_bdnb.append("Réponse vide ou de forme inattendue :")
+                            _rapport_bdnb.append(_json_diag.dumps(data_diag2, ensure_ascii=False, indent=2))
                     except ValueError:
                         st.error("Réponse non-JSON :")
                         st.code(reponse_diag2.text[:2000])
+                        _rapport_bdnb.append("Réponse non-JSON :")
+                        _rapport_bdnb.append(reponse_diag2.text[:2000])
                 except _requests_diag.exceptions.RequestException as e:
                     st.error(f"Échec de l'appel réseau : {e}")
+                    _rapport_bdnb.append(f"Échec de l'appel réseau : {e}")
+
+                st.divider()
+                st.markdown("**📋 Copier ce diagnostic**")
+                texte_complet_bdnb = "\n".join(_rapport_bdnb)
+                st.code(texte_complet_bdnb, language="text")
+                st.download_button(
+                    "⬇️ Télécharger ce diagnostic (.txt)",
+                    texte_complet_bdnb,
+                    file_name=f"diagnostic_bdnb_{geo['label'][:30].replace(' ', '_')}.txt",
+                    use_container_width=True,
+                )
         else:
             st.metric("Année de construction estimée", batiment["annee_construction"])
             st.caption(
