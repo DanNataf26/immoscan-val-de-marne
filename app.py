@@ -1090,6 +1090,43 @@ with tab_recherche:
                 "bâtiment (donnée parfois manquante ou non encore croisée "
                 "dans la BDNB)."
             )
+            with st.expander("🔧 Diagnostic technique (BDNB)"):
+                st.caption(
+                    "Cette intégration n'a encore jamais été confirmée en "
+                    "conditions réelles — ce diagnostic sert à voir la vraie "
+                    "réponse de l'API plutôt que de continuer à deviner."
+                )
+                import requests as _requests_diag
+                url_diag = core.BDNB_API_URL
+                d_lat = 40 / 111_320
+                import math as _math_diag
+                d_lon = 40 / (111_320 * max(_math_diag.cos(_math_diag.radians(geo["latitude"])), 0.1))
+                bbox_diag = (
+                    f"{geo['longitude'] - d_lon},{geo['latitude'] - d_lat},"
+                    f"{geo['longitude'] + d_lon},{geo['latitude'] + d_lat}"
+                )
+                st.write(f"URL : {url_diag}")
+                st.write(f"Paramètre bbox : {bbox_diag}")
+                try:
+                    reponse_diag = _requests_diag.get(
+                        url_diag, params={"bbox": bbox_diag}, timeout=15
+                    )
+                    st.write(f"Statut HTTP : {reponse_diag.status_code}")
+                    st.write(f"URL réellement appelée : {reponse_diag.url}")
+                    try:
+                        data_diag = reponse_diag.json()
+                        if isinstance(data_diag, list) and data_diag:
+                            st.write("Champs disponibles (premier résultat) :")
+                            st.code(sorted(data_diag[0].keys()))
+                            st.json(data_diag[0])
+                        else:
+                            st.warning("Réponse vide ou de forme inattendue :")
+                            st.json(data_diag)
+                    except ValueError:
+                        st.error("Réponse non-JSON :")
+                        st.code(reponse_diag.text[:2000])
+                except _requests_diag.exceptions.RequestException as e:
+                    st.error(f"Échec de l'appel réseau : {e}")
         else:
             st.metric("Année de construction estimée", batiment["annee_construction"])
             st.caption(
