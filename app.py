@@ -593,6 +593,28 @@ with tab_recherche:
                     else:
                         st.session_state["surface_bien_selection"] = None
 
+                    # La surface d'une ligne "Immeuble (vente en bloc, estimé)"
+                    # est une SOMME sur tous les lots (ex. 210 m² pour 8
+                    # appartements), pas la surface d'un logement individuel —
+                    # la comparer à la surface d'UN appartement (ex. dans un
+                    # DPE, forcément individuel) n'aurait aucun sens. On
+                    # signale ce cas pour que les sections en aval (DPE,
+                    # comparables) sachent ne pas l'utiliser comme référence
+                    # d'un logement précis.
+                    surface_ref = st.session_state.get("surface_bien_selection")
+                    est_globale = False
+                    if surface_ref is not None and "surface_reelle_bati" in history_affichee.columns:
+                        lignes_de_cette_surface = history_affichee[
+                            history_affichee["surface_reelle_bati"] == surface_ref
+                        ]
+                        if not lignes_de_cette_surface.empty:
+                            ligne_ref = lignes_de_cette_surface.iloc[0]
+                            est_globale = (
+                                ligne_ref.get("type_local") == "Immeuble (vente en bloc, estimé)"
+                                or (pd.notna(ligne_ref.get("nb_lots")) and ligne_ref.get("nb_lots", 1) > 1)
+                            )
+                    st.session_state["surface_bien_est_globale"] = est_globale
+
                     st.dataframe(history_affichee, use_container_width=True)
                     st.caption(
                         "Filtré sur ce numéro + cette rue + cette commune "
@@ -821,7 +843,14 @@ with tab_recherche:
                 type_local_recherche = (
                     canon_avant_recherche[0] if len(canon_avant_recherche) == 1 else None
                 )
-                surface_recherche = st.session_state.get("surface_bien_selection")
+                # Une surface issue d'une ligne "Immeuble (vente en bloc,
+                # estimé)" est une somme sur tous les lots, pas la surface
+                # d'un bien individuel — inutilisable comme référence de
+                # comparaison avec des ventes individuelles.
+                surface_recherche = (
+                    None if st.session_state.get("surface_bien_est_globale")
+                    else st.session_state.get("surface_bien_selection")
+                )
 
                 resultat_auto = core.find_comparables_auto(
                     active_dept, geo["latitude"], geo["longitude"],
@@ -1071,6 +1100,37 @@ with tab_recherche:
         st.subheader("DPE enregistré à cette adresse")
         with st.spinner("Recherche DPE ADEME..."):
             dpe = core.find_dpe(geo["label"], geo.get("code_postal"))
+        type_bien_pour_dpe = st.session_state.get("types_bien_selection", [])
+        type_bien_pour_dpe = type_bien_pour_dpe[0] if len(type_bien_pour_dpe) == 1 else None
+        # Une surface issue d'une ligne "Immeuble (vente en bloc, estimé)"
+        # est une somme sur tous les lots (ex. 210 m² pour 8 appartements),
+        # pas la surface d'un logement individuel — un DPE porte lui
+        # toujours sur UN logement précis, la comparaison n'aurait aucun sens.
+        surface_pour_dpe = (
+            None if st.session_state.get("surface_bien_est_globale")
+            else st.session_state.get("surface_bien_selection")
+        )
+        if dpe is not None and not dpe.empty:
+            dpe = core.prioriser_dpe_selon_selection(dpe, type_bien_pour_dpe, surface_pour_dpe)
+            if type_bien_pour_dpe or surface_pour_dpe:
+                elements = []
+                if type_bien_pour_dpe:
+                    elements.append(f"type « {type_bien_pour_dpe} »")
+                if surface_pour_dpe:
+                    elements.append(f"surface {surface_pour_dpe:.0f} m²")
+                st.caption(
+                    f"📎 Trié en priorité selon le {' et la '.join(elements)} "
+                    "sélectionné(e) dans l'historique de cette adresse — les "
+                    "autres DPE de l'adresse restent visibles en dessous, "
+                    "rien n'est masqué."
+                )
+            elif st.session_state.get("surface_bien_est_globale"):
+                st.caption(
+                    "ℹ️ La surface sélectionnée dans l'historique correspond à "
+                    "un immeuble vendu en bloc (somme de plusieurs logements) — "
+                    "elle n'est pas comparable à un DPE, qui porte toujours sur "
+                    "un seul logement. Aucun tri par surface n'est appliqué ici."
+                )
         if dpe is None or dpe.empty:
             st.caption(
                 "Aucun DPE trouvé pour ce numéro et cette rue précisément "

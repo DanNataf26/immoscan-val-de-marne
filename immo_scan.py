@@ -2054,7 +2054,64 @@ def interpret_dpe_par_logement(dpe: pd.DataFrame | None) -> list[dict]:
     return entrees
 
 
-def construire_tableau_dpe(dpe: pd.DataFrame | None) -> tuple[pd.DataFrame | None, str | None]:
+def prioriser_dpe_selon_selection(
+    dpe: pd.DataFrame | None, type_selectionne: str | None, surface_selectionnee: float | None,
+) -> pd.DataFrame | None:
+    """
+    Trie (sans exclure) les DPE trouvés pour une adresse, en plaçant en
+    premier ceux qui correspondent au type et/ou à la surface déjà
+    sélectionnés dans "Historique probable" pour cette même adresse — pour
+    corréler les deux sections plutôt que de les traiter indépendamment.
+
+    Ne filtre PAS (n'exclut aucune ligne) : une différence de surface entre
+    DVF (souvent Carrez) et DPE (surface habitable, définition différente)
+    est normale et ne doit pas masquer à tort le bon logement si l'écart
+    est seulement de quelques m². Le tri place juste les correspondances
+    probables en tête, le reste des DPE de l'adresse restant visible en
+    dessous.
+    """
+    if dpe is None or dpe.empty:
+        return dpe
+
+    df = dpe.copy()
+    CANDIDATS_TYPE = ["type_batiment", "type_batiment_dpe"]
+    CANDIDATS_SURFACE = ["surface_habitable_logement", "surface_habitable"]
+    col_type = next((c for c in CANDIDATS_TYPE if c in df.columns), None)
+    col_surface = next((c for c in CANDIDATS_SURFACE if c in df.columns), None)
+
+    # Le DVF dit "Appartement"/"Maison", le DPE dit souvent "appartement"/
+    # "maison" en minuscules (parfois d'autres variantes) — normalise pour
+    # comparer sur le mot-clé plutôt que sur une égalité stricte de casse.
+    type_norm = None
+    if type_selectionne:
+        t = type_selectionne.lower()
+        if "appart" in t:
+            type_norm = "appart"
+        elif "maison" in t:
+            type_norm = "maison"
+
+    def _score_type(row):
+        if col_type and type_norm and pd.notna(row.get(col_type)):
+            return 0 if type_norm in str(row[col_type]).lower() else 1
+        return 1
+
+    def _ecart_surface(row):
+        if col_surface and surface_selectionnee and pd.notna(row.get(col_surface)):
+            try:
+                return abs(float(row[col_surface]) - surface_selectionnee)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    df["_score_type"] = df.apply(_score_type, axis=1)
+    df["_ecart_surface"] = df.apply(_ecart_surface, axis=1)
+    df = df.sort_values(["_score_type", "_ecart_surface"]).drop(
+        columns=["_score_type", "_ecart_surface"]
+    )
+    return df
+
+
+
     """
     Réorganise le tableau DPE brut en mettant en premier les colonnes
     essentielles pour distinguer un logement d'un autre dans un immeuble
