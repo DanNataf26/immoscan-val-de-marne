@@ -2049,11 +2049,31 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     if not rue_tokens:
         return None
     tokens_distinctifs = [t for t in rue_tokens if t not in MOTS_GENERIQUES_BDNB] or rue_tokens
+
+    # `ilike` sur PostgREST/Postgres est insensible à la casse mais PAS aux
+    # accents ("belvedere" ne matche jamais "Belvédère" côté serveur), alors
+    # que notre normalisation (côté recherche) retire les accents. On essaie
+    # donc aussi la forme brute (accentuée) de chaque mot pivot, retrouvée
+    # dans l'adresse d'origine, en plus de sa forme normalisée.
+    import re as _re_bdnb
+    mots_bruts = _re_bdnb.findall(r"[^\s,]+", address)
+
+    def _forme_brute(mot_normalise):
+        for w in mots_bruts:
+            if _normalize_text(w) == mot_normalise:
+                return w
+        return mot_normalise
+
     # Essaie chaque mot distinctif comme pivot de recherche serveur, du plus
     # long au plus court, jusqu'à trouver un candidat — utile si le premier
     # mot choisi n'existe pas sous cette forme dans la BDNB (abréviation
     # différente) alors qu'un autre mot de la même rue, lui, y figure bien.
-    pivots_a_essayer = sorted(set(tokens_distinctifs), key=len, reverse=True)
+    pivots_a_essayer = []
+    for p in sorted(set(tokens_distinctifs), key=len, reverse=True):
+        pivots_a_essayer.append(p)
+        brut = _forme_brute(p)
+        if brut.lower() != p:
+            pivots_a_essayer.append(brut)
 
     try:
         for mot_pivot in pivots_a_essayer:

@@ -1149,6 +1149,14 @@ with tab_recherche:
                         "plus distinctif du nom de rue est donc filtré côté "
                         "serveur en plus, pour rester sous ce plafond."
                     )
+                    st.caption(
+                        "ℹ️ Ce diagnostic ne teste qu'UNE seule variante du mot "
+                        "pivot. La vraie fonction (get_batiment_bdnb) essaie en "
+                        "plus les autres mots distinctifs de la rue ET la forme "
+                        "accentuée d'origine (ilike n'est pas insensible aux "
+                        "accents) — un '0 résultat' ici ne garantit donc pas "
+                        "un échec réel de la recherche dans l'appli."
+                    )
                     _rapport_bdnb += [
                         f"URL : {url_diag}",
                         f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
