@@ -1962,33 +1962,35 @@ BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox
 def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     """
     Récupère la carte d'identité du bâtiment via l'API BDNB (Base de Données
-    Nationale des Bâtiments, CSTB) — gratuite, sans clé. Utilisée ici
-    principalement pour l'année de construction, absente des données DVF.
+    Nationale des Bâtiments, CSTB) — gratuite, sans clé.
 
     Confirmé en conditions réelles (millésime 2026-02.a, testé le
     19/07/2026) :
-    - le champ `annee_construction` existe bien dans `batiment_groupe_complet`
     - l'ancien chemin `/bbox` documenté en 2024 n'existe plus dans le schéma
       actuel (erreur PGRST202) — l'API a changé de structure depuis
     - sa géométrie (`geom_groupe`) est en Lambert93 (EPSG:2154), pas en
       latitude/longitude WGS84 : une recherche par proximité GPS directe
       n'est de toute façon pas possible sans reprojection
     - **10 résultats semble être un plafond serveur strict, quel que soit
-      le filtre appliqué** (constaté aussi bien sans filtre que filtré sur
-      commune + numéro seul) — pas juste une limite par défaut sur requête
-      non filtrée. Filtrer sur le numéro seul ne suffit donc pas si plus de
-      10 bâtiments de la commune contiennent ce numéro (fréquent, plusieurs
-      rues ayant le même numéro) : le bon bâtiment peut être présent mais
-      hors des 10 premiers renvoyés, dans un ordre par ailleurs arbitraire.
+      le filtre appliqué** — le filtre pousse donc côté serveur le numéro ET
+      le mot le plus distinctif du nom de rue, pour rester sous ce plafond.
+    - Plusieurs bâtiments distincts peuvent revendiquer la même adresse
+      texte (bâtiment d'angle la listant en secondaire, en plus de sa
+      propre adresse principale sur l'autre rue ; ou plusieurs entrées
+      d'une même résidence) — tous les candidats correspondants sont donc
+      renvoyés, pas seulement le "meilleur", pour ne pas perdre cette
+      information (composition d'un ensemble immobilier, bâtiments voisins
+      partageant le numéro...).
 
-    Le filtre pousse donc côté serveur le numéro ET le mot le plus distinctif
-    du nom de rue (le plus long, hors mots génériques comme "rue"/"avenue"),
-    pour réduire autant que possible le lot sous ce plafond. La correspondance
-    fine (numéro exact + tous les mots du nom de rue) se fait ensuite côté
-    client sur ce petit lot, même principe que pour le DVF (voir
-    find_property_history). Si le bâtiment n'est toujours pas dans le lot
-    malgré ce filtre resserré, la fonction ne peut pas le trouver — limite
-    du niveau d'accès gratuit de cette API, pas un bug du code.
+    Retourne un dict avec :
+    - les champs du "meilleur" candidat (celui qui a une année de
+      construction renseignée si un tel candidat existe, sinon le premier
+      trouvé), directement accessibles comme avant (annee_construction,
+      identifiant_bdnb...) pour ne pas casser le code appelant existant
+    - `candidats` : la liste COMPLÈTE des bâtiments correspondants trouvés
+      (chacun avec les mêmes champs), y compris ceux non retenus comme
+      "meilleur" — utile pour montrer les bâtiments voisins/liés plutôt que
+      les ignorer silencieusement
     """
     import requests
 
@@ -1997,6 +1999,20 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
         "square", "route", "sentier", "quai", "cours", "villa", "cite",
         "passage", "voie", "chaussee",
     }
+
+    CHAMPS_UTILES_BDNB = [
+        "batiment_groupe_id", "annee_construction",
+        "libelle_adr_principale_ban", "l_libelle_adr", "l_parcelle_id",
+        "nb_log", "nb_niveau", "hauteur_mean", "mat_mur_txt", "mat_toit_txt",
+        "alea_argile", "usage_principal_bdnb_open",
+        "denomination_monument_historique", "distance_monument_historique",
+        "contrainte_urbanisme_ac1", "zone_plu_bati_patrimonial",
+        "quartier_prioritaire", "nom_qp",
+        "batenr_favorabilite_solaire_thermique",
+        "batenr_potentiel_prod_solaire_thermique_annuelle",
+        "valeur_fonciere_m2_residentiel_rel_commune",
+        "surface_emprise_sol",
+    ]
 
     if not code_insee:
         return None
@@ -2015,10 +2031,7 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             params={
                 "code_commune_insee": f"eq.{code_insee}",
                 "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot}*",
-                "select": (
-                    "batiment_groupe_id,annee_construction,"
-                    "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
-                ),
+                "select": ",".join(CHAMPS_UTILES_BDNB),
                 "limit": 200,
             },
             timeout=15,
@@ -2054,6 +2067,7 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             "annee_construction": meilleur.get("annee_construction"),
             "identifiant_bdnb": meilleur.get("batiment_groupe_id"),
             "brut": meilleur,  # gardé pour inspection/diagnostic si besoin
+            "candidats": candidats,  # tous les bâtiments correspondants, meilleur inclus
         }
     except Exception as exc:
         print(f"[warn] BDNB échoué pour code_insee={code_insee} : {exc}")

@@ -1223,6 +1223,7 @@ with tab_recherche:
                     use_container_width=True,
                 )
         else:
+            b = batiment["brut"]
             st.metric("Année de construction estimée", batiment["annee_construction"])
             st.caption(
                 "Source : BDNB (Base de Données Nationale des Bâtiments, CSTB) — "
@@ -1230,6 +1231,91 @@ with tab_recherche:
                 "estimation statistique plutôt qu'une donnée certaine selon les "
                 "bâtiments — à vérifier si un doute important."
             )
+
+            # Fiche bâtiment complémentaire — champs BDNB au-delà de l'année
+            # de construction, quand renseignés (beaucoup de bâtiments n'ont
+            # qu'une partie de ces champs remplis selon les sources croisées
+            # disponibles pour eux).
+            cb1, cb2, cb3 = st.columns(3)
+            if b.get("nb_log"):
+                cb1.metric("Logements dans le bâtiment", int(b["nb_log"]))
+            if b.get("nb_niveau"):
+                cb2.metric("Niveaux", int(b["nb_niveau"]))
+            if b.get("hauteur_mean"):
+                cb3.metric("Hauteur moyenne", f"{b['hauteur_mean']:.0f} m")
+
+            details_bati = []
+            if b.get("mat_mur_txt"):
+                details_bati.append(f"**Murs :** {b['mat_mur_txt'].capitalize()}")
+            if b.get("mat_toit_txt"):
+                details_bati.append(f"**Toiture :** {b['mat_toit_txt'].capitalize()}")
+            if b.get("usage_principal_bdnb_open"):
+                details_bati.append(f"**Usage principal :** {b['usage_principal_bdnb_open']}")
+            if b.get("alea_argile"):
+                details_bati.append(f"**Aléa retrait-gonflement des argiles :** {b['alea_argile']}")
+            if b.get("valeur_fonciere_m2_residentiel_rel_commune"):
+                details_bati.append(
+                    "**Valeur foncière/m² relative à la commune :** "
+                    f"{b['valeur_fonciere_m2_residentiel_rel_commune']:.2f} "
+                    "(1,0 = moyenne communale)"
+                )
+            if b.get("denomination_monument_historique"):
+                dist = b.get("distance_monument_historique")
+                dist_txt = f", à {dist:.0f} m" if dist else ""
+                details_bati.append(
+                    f"**Monument historique à proximité :** "
+                    f"{b['denomination_monument_historique']}{dist_txt}"
+                )
+            if b.get("contrainte_urbanisme_ac1") or b.get("zone_plu_bati_patrimonial"):
+                details_bati.append(
+                    "**⚠️ Contrainte patrimoniale/urbanisme** signalée pour ce "
+                    "bâtiment — à vérifier auprès du service urbanisme de la commune."
+                )
+            if b.get("quartier_prioritaire") or b.get("nom_qp"):
+                details_bati.append(
+                    f"**Quartier prioritaire de la ville (QPV) :** {b.get('nom_qp') or 'oui'}"
+                )
+            if b.get("batenr_favorabilite_solaire_thermique"):
+                pot = b.get("batenr_potentiel_prod_solaire_thermique_annuelle")
+                pot_txt = f" (potentiel estimé : {pot:.1f} kWh/m²/an)" if pot else ""
+                details_bati.append(f"**Favorable au solaire thermique**{pot_txt}")
+            if b.get("surface_emprise_sol"):
+                details_bati.append(f"**Emprise au sol :** {b['surface_emprise_sol']:.0f} m²")
+
+            if details_bati:
+                st.markdown("  \n".join(details_bati))
+                st.caption(
+                    "Champs BDNB complémentaires, non tous systématiquement "
+                    "renseignés selon les bâtiments — absence d'une ligne ci-"
+                    "dessus = donnée non disponible pour ce bâtiment, pas "
+                    "forcément une absence réelle (ex. pas de contrainte "
+                    "patrimoniale)."
+                )
+
+            # Bâtiments alternatifs trouvés à la même adresse texte (cas
+            # fréquent : bâtiment d'angle, plusieurs entrées d'une même
+            # résidence...) — montrés plutôt qu'ignorés silencieusement.
+            autres = [c for c in batiment.get("candidats", []) if c is not b]
+            if autres:
+                with st.expander(
+                    f"🏘️ {len(autres)} autre(s) bâtiment(s) trouvé(s) à cette "
+                    "même adresse"
+                ):
+                    st.caption(
+                        "Peut correspondre à un bâtiment voisin (angle de rue), "
+                        "une autre entrée de la même résidence, ou une adresse "
+                        "partagée par plusieurs constructions distinctes."
+                    )
+                    lignes_autres = []
+                    for c in autres:
+                        lignes_autres.append({
+                            "adresse_bdnb": c.get("libelle_adr_principale_ban"),
+                            "annee_construction": c.get("annee_construction"),
+                            "nb_log": c.get("nb_log"),
+                            "nb_niveau": c.get("nb_niveau"),
+                            "identifiant_bdnb": c.get("batiment_groupe_id"),
+                        })
+                    st.dataframe(pd.DataFrame(lignes_autres), use_container_width=True)
 
         if suggested_surface and suggested_type:
             st.caption(
