@@ -2014,6 +2014,25 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
         "surface_emprise_sol",
     ]
 
+    # Équivalences d'abréviations administratives françaises courantes : la
+    # BAN/BDNB et le DVF n'utilisent pas toujours la même forme pour le même
+    # mot (ex. Saint-Maurice liste déjà "MAL DE LATTRE DE TASSIGNY" — Mal
+    # pour Maréchal — dans le DVF lui-même). Sans cette tolérance, une seule
+    # forme différente entre les deux sources bloque toute correspondance,
+    # même avec le bon numéro et la bonne rue par ailleurs.
+    EQUIVALENCES_ABREVIATIONS = {
+        "general": "gal", "gal": "general",
+        "marechal": "mal", "mal": "marechal",
+        "saint": "st", "st": "saint",
+        "sainte": "ste", "ste": "sainte",
+    }
+
+    def _tokens_correspondent(tokens_recherches, rue_candidate):
+        return all(
+            t in rue_candidate or EQUIVALENCES_ABREVIATIONS.get(t, "") in rue_candidate
+            for t in tokens_recherches
+        )
+
     if not code_insee:
         return None
     target_numero, target_rue = _parse_address_number_street(address)
@@ -2023,34 +2042,44 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     if not rue_tokens:
         return None
     tokens_distinctifs = [t for t in rue_tokens if t not in MOTS_GENERIQUES_BDNB] or rue_tokens
-    mot_pivot = max(tokens_distinctifs, key=len)
+    # Essaie chaque mot distinctif comme pivot de recherche serveur, du plus
+    # long au plus court, jusqu'à trouver un candidat — utile si le premier
+    # mot choisi n'existe pas sous cette forme dans la BDNB (abréviation
+    # différente) alors qu'un autre mot de la même rue, lui, y figure bien.
+    pivots_a_essayer = sorted(set(tokens_distinctifs), key=len, reverse=True)
 
     try:
-        resp = requests.get(
-            "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
-            params={
-                "code_commune_insee": f"eq.{code_insee}",
-                "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot}*",
-                "select": ",".join(CHAMPS_UTILES_BDNB),
-                "limit": 200,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        results = resp.json()
-        if not results:
-            return None
+        for mot_pivot in pivots_a_essayer:
+            resp = requests.get(
+                "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
+                params={
+                    "code_commune_insee": f"eq.{code_insee}",
+                    "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot}*",
+                    "select": ",".join(CHAMPS_UTILES_BDNB),
+                    "limit": 200,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            results = resp.json()
+            if not results:
+                continue
 
-        candidats = []
-        for r in results:
-            adresses = list(r.get("l_libelle_adr") or [])
-            if r.get("libelle_adr_principale_ban"):
-                adresses.append(r["libelle_adr_principale_ban"])
-            for adr in adresses:
-                num, rue = _parse_address_number_street(adr)
-                if num == target_numero and all(t in rue for t in rue_tokens):
-                    candidats.append(r)
-                    break  # inutile de vérifier les autres adresses de CE bâtiment
+            candidats = []
+            for r in results:
+                adresses = list(r.get("l_libelle_adr") or [])
+                if r.get("libelle_adr_principale_ban"):
+                    adresses.append(r["libelle_adr_principale_ban"])
+                for adr in adresses:
+                    num, rue = _parse_address_number_street(adr)
+                    if num == target_numero and _tokens_correspondent(rue_tokens, rue):
+                        candidats.append(r)
+                        break  # inutile de vérifier les autres adresses de CE bâtiment
+
+            if candidats:
+                break
+        else:
+            candidats = []
 
         if not candidats:
             return None
