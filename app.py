@@ -1072,13 +1072,104 @@ with tab_recherche:
         with st.spinner("Recherche DPE ADEME..."):
             dpe = core.find_dpe(geo["label"], geo.get("code_postal"))
         if dpe is None or dpe.empty:
-            st.caption("Aucun DPE trouvé automatiquement pour cette adresse.")
+            st.caption(
+                "Aucun DPE trouvé pour ce numéro et cette rue précisément "
+                "(le bien n'a peut-être pas de DPE établi depuis juillet 2021, "
+                "ou pas encore publié dans cette base)."
+            )
+            with st.expander("🔧 Diagnostic technique (DPE ADEME)"):
+                st.caption(
+                    "Le nom du jeu de données et des champs de l'API ADEME a "
+                    "déjà changé par le passé (voir l'historique BDNB dans ce "
+                    "projet) — ce diagnostic montre la vraie réponse plutôt "
+                    "que de deviner à nouveau."
+                )
+                import requests as _requests_diag_dpe
+                url_diag_dpe = core.ADEME_DPE_API_URL
+                query_diag_dpe = geo["label"]
+                st.write(f"URL : {url_diag_dpe}")
+                st.write(f"Requête (q) : {query_diag_dpe}")
+                _rapport_dpe = [
+                    f"Adresse : {geo['label']}",
+                    f"URL : {url_diag_dpe}",
+                    f"Requête (q) : {query_diag_dpe}",
+                ]
+                try:
+                    reponse_diag_dpe = _requests_diag_dpe.get(
+                        url_diag_dpe, params={"q": query_diag_dpe, "size": 10}, timeout=15
+                    )
+                    st.write(f"Statut HTTP : {reponse_diag_dpe.status_code}")
+                    _rapport_dpe.append(f"Statut HTTP : {reponse_diag_dpe.status_code}")
+                    try:
+                        data_diag_dpe = reponse_diag_dpe.json()
+                        resultats_diag = data_diag_dpe.get("results", [])
+                        st.write(f"Nombre de résultats : {len(resultats_diag)}")
+                        _rapport_dpe.append(f"Nombre de résultats : {len(resultats_diag)}")
+                        if resultats_diag:
+                            st.write("Champs disponibles (premier résultat) :")
+                            st.code(sorted(resultats_diag[0].keys()))
+                            st.json(resultats_diag[0])
+                            _rapport_dpe.append("Champs disponibles (premier résultat) :")
+                            _rapport_dpe.append(str(sorted(resultats_diag[0].keys())))
+                            import json as _json_diag_dpe
+                            _rapport_dpe.append(
+                                _json_diag_dpe.dumps(resultats_diag[0], ensure_ascii=False, indent=2)
+                            )
+                        else:
+                            st.warning("Aucun résultat, même sans filtrage par adresse exacte.")
+                            _rapport_dpe.append("Aucun résultat, même sans filtrage.")
+                    except ValueError:
+                        st.error("Réponse non-JSON :")
+                        st.code(reponse_diag_dpe.text[:2000])
+                        _rapport_dpe.append("Réponse non-JSON :")
+                        _rapport_dpe.append(reponse_diag_dpe.text[:2000])
+                except _requests_diag_dpe.exceptions.RequestException as e:
+                    st.error(f"Échec de l'appel réseau : {e}")
+                    _rapport_dpe.append(f"Échec de l'appel réseau : {e}")
+
+                st.divider()
+                st.markdown("**📋 Copier ce diagnostic**")
+                texte_complet_dpe = "\n".join(_rapport_dpe)
+                st.code(texte_complet_dpe, language="text")
+                st.download_button(
+                    "⬇️ Télécharger ce diagnostic (.txt)",
+                    texte_complet_dpe,
+                    file_name=f"diagnostic_dpe_{geo['label'][:30].replace(' ', '_')}.txt",
+                    use_container_width=True,
+                )
         else:
+            dpe_classe = core.interpret_dpe_classe(dpe)
+            if dpe_classe and dpe_classe.get("classe_energie"):
+                DPE_COULEURS = {
+                    "A": "#00A652", "B": "#51B848", "C": "#CBDB2A",
+                    "D": "#FFF200", "E": "#FCB040", "F": "#F26522", "G": "#ED1C24",
+                }
+                lettre = dpe_classe["classe_energie"]
+                couleur = DPE_COULEURS.get(lettre, "#999999")
+                col_badge, col_texte = st.columns([1, 3])
+                with col_badge:
+                    st.markdown(
+                        f"""
+                        <div style="background:{couleur}; color:white; font-weight:bold;
+                                    font-size:2.5rem; text-align:center; border-radius:10px;
+                                    padding:0.5rem 0; width:100%;">
+                            {lettre}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("Classe énergie")
+                with col_texte:
+                    if dpe_classe.get("classe_ges"):
+                        st.write(f"**GES :** classe {dpe_classe['classe_ges']}")
+                    st.write(dpe_classe["note"])
+                st.write("")
             st.dataframe(dpe, use_container_width=True)
             st.caption(
-                "Le DPE n'alimente pas le pré-remplissage automatique (recherche "
-                "textuelle approximative, non validée aussi strictement que "
-                "l'historique DVF) — seule une correspondance exacte le fait."
+                "Correspondance vérifiée sur ce numéro et cette rue précisément "
+                "(même logique que l'historique DVF) — en copropriété, "
+                "plusieurs logements peuvent partager cette adresse : vérifiez "
+                "que le lot correspond bien si plusieurs lignes apparaissent."
             )
 
         st.subheader("Année de construction (BDNB)")

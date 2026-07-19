@@ -1390,9 +1390,10 @@ def google_street_view_url(lat: float, lon: float) -> str:
 def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5) -> pd.DataFrame | None:
     """
     Recherche les DPE (diagnostics de performance énergétique) disponibles
-    pour une adresse via l'API ouverte de l'ADEME. Recherche approximative
-    par texte libre — à vérifier manuellement en cas de doute (plusieurs
-    logements peuvent partager la même adresse : copropriétés, immeubles).
+    pour l'adresse EXACTE (numéro + rue), via l'API ouverte de l'ADEME —
+    même principe de correspondance que pour le DVF/la BDNB
+    (_parse_address_number_street), pour ne plus remonter les DPE d'adresses
+    voisines simplement proches en recherche textuelle libre.
 
     IMPORTANT : ce jeu de données ne couvre que les DPE établis à partir du
     1er juillet 2021 (réforme du DPE). Un bien dont le dernier diagnostic est
@@ -1400,22 +1401,56 @@ def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5)
     fonction, l'ADEME publie ces DPE plus anciens dans un jeu de données séparé.
 
     NB : le nom exact du jeu de données / des champs sur l'API data-fair de
-    l'ADEME évolue de temps en temps. Si cette fonction ne retourne rien
-    alors qu'un DPE existe, vérifiez le nom du dataset et des champs sur
-    https://data.ademe.fr/datasets/dpe03existant (bouton API).
+    l'ADEME a déjà changé par le passé (dataset actuel : dpe03existant, vu
+    aussi mentionné ailleurs sous d'autres noms selon les époques) — plusieurs
+    noms de champs candidats sont donc essayés pour l'adresse et pour la
+    lettre de classe énergie/GES, plutôt qu'un seul nom supposé figé.
     """
     import requests
     query = address.strip()
     if code_postal and code_postal not in query:
         query = f"{query} {code_postal}"
-    params = {"q": query, "size": max_results}
+    params = {"q": query, "size": max(max_results * 6, 30)}
+
+    target_numero, target_rue = _parse_address_number_street(address)
+    rue_tokens = [t for t in target_rue.split() if len(t) > 2] if target_rue else []
+
+    CHAMPS_ADRESSE_CANDIDATS = [
+        "adresse_ban", "adresse_brut", "adresse", "Adresse_(BAN)",
+        "Adresse_brut", "geo_adresse",
+    ]
+
     try:
         resp = requests.get(ADEME_DPE_API_URL, params=params, timeout=10)
         resp.raise_for_status()
         results = resp.json().get("results", [])
         if not results:
             return None
-        return pd.json_normalize(results)
+        df = pd.json_normalize(results)
+        if not target_numero or not rue_tokens:
+            return df.head(max_results)
+
+        champ_adresse = next((c for c in CHAMPS_ADRESSE_CANDIDATS if c in df.columns), None)
+        if champ_adresse is None:
+            # Aucun champ d'adresse reconnu dans ce schéma : on ne peut pas
+            # filtrer précisément, on retourne tel quel plutôt que de risquer
+            # de tout exclure à tort — voir le diagnostic technique dans l'app.
+            return df.head(max_results)
+
+        def _correspond(adr_dpe):
+            if pd.isna(adr_dpe):
+                return False
+            num, rue = _parse_address_number_street(str(adr_dpe))
+            return num == target_numero and all(t in rue for t in rue_tokens)
+
+        df_exact = df[df[champ_adresse].apply(_correspond)]
+        if not df_exact.empty:
+            return df_exact.head(max_results)
+        # Rien d'exact : on retourne quand même le lot brut (non filtré) pour
+        # que l'appli puisse au moins montrer qu'il y a des résultats
+        # voisins, clairement signalés comme non confirmés — mieux que rien
+        # du tout si l'adresse exacte n'a simplement pas encore de DPE publié.
+        return None
     except Exception as exc:
         print(f"[warn] Recherche DPE échouée pour '{address}' : {exc}")
         return None
