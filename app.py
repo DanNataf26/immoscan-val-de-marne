@@ -752,10 +752,12 @@ with tab_recherche:
                     with col_radius:
                         radius_comparables = st.slider(
                             "Rayon", 100, 1000, 100, step=50, format="%d m",
+                            key="radius_comparables_widget",
                         )
                     with col_years:
                         since_years = st.slider(
                             "Dernières N années", 1, 15, 5, step=1,
+                            key="since_years_widget",
                             help="Ne borne que le DVF récent (2021+). Le Cerema "
                                  "DVF+ (2014-2020), quand disponible, est toujours "
                                  "inclus intégralement — sa période est fixe et ne "
@@ -813,6 +815,20 @@ with tab_recherche:
                 resume_comparables = resultat_auto["resume"]
                 radius_utilise = resultat_auto["radius_final"]
                 since_years_utilise = resultat_auto["since_years_final"]
+
+                # Le curseur affiche la valeur DEMANDÉE, pas forcément celle
+                # réellement utilisée après élargissement automatique — sans
+                # ça, "Rayon" reste bloqué sur 100 m même quand la recherche
+                # a dû élargir à 250 m, ce qui est trompeur. On resynchronise
+                # les widgets sur la valeur effective, une seule fois (le
+                # test d'égalité empêche une boucle de rerun continue).
+                if (
+                    radius_utilise != st.session_state.get("radius_comparables_widget")
+                    or since_years_utilise != st.session_state.get("since_years_widget")
+                ):
+                    st.session_state["radius_comparables_widget"] = radius_utilise
+                    st.session_state["since_years_widget"] = since_years_utilise
+                    st.rerun()
 
                 if type_local_recherche:
                     st.caption(
@@ -979,8 +995,11 @@ with tab_recherche:
                         st.info(
                             f"🔍 Recherche élargie automatiquement à {radius_utilise:.0f} m "
                             f"/ {since_years_utilise} ans (au lieu de {radius_comparables:.0f} m "
-                            f"/ {since_years} ans) car moins de {max_comparables} biens "
-                            "comparables avaient été trouvés avec les réglages initiaux."
+                            f"/ {since_years} ans) car moins de {max_comparables} ventes "
+                            "**DVF (2021+) récentes** avaient été trouvées avec les réglages "
+                            "initiaux — Cerema DVF+ peut déjà satisfaire ce nombre à lui seul "
+                            "sans que ça arrête l'élargissement, le DVF récent étant priorisé "
+                            "(voir infobulle du curseur ci-dessus)."
                         )
                     total = resume_comparables["total"]
                     par_source = resume_comparables["total_par_source"]
