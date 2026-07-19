@@ -762,16 +762,22 @@ with tab_recherche:
                         st.session_state["since_years_widget"] = (
                             st.session_state.pop("_pending_years_sync")
                         )
+                    # Valeurs de départ posées directement en session_state,
+                    # sans jamais passer aussi un `value=` explicite au
+                    # widget : fournir les deux à la fois (même si égaux) est
+                    # une combinaison que Streamlit signale par un avertissement.
+                    st.session_state.setdefault("radius_comparables_widget", 100)
+                    st.session_state.setdefault("since_years_widget", 5)
 
                     col_radius, col_years = st.columns(2)
                     with col_radius:
                         radius_comparables = st.slider(
-                            "Rayon", 100, 1000, 100, step=50, format="%d m",
+                            "Rayon", 100, 1000, step=50, format="%d m",
                             key="radius_comparables_widget",
                         )
                     with col_years:
                         since_years = st.slider(
-                            "Dernières N années", 1, 15, 5, step=1,
+                            "Dernières N années", 1, 15, step=1,
                             key="since_years_widget",
                             help="Ne borne que le DVF récent (2021+). Le Cerema "
                                  "DVF+ (2014-2020), quand disponible, est toujours "
