@@ -376,6 +376,144 @@ st.sidebar.caption(
     "Sa référence sera alors préparée automatiquement à son tour."
 )
 
+st.sidebar.divider()
+with st.sidebar.expander("🧪 Test API Sitadel (DiDo / SDES)"):
+    st.caption(
+        "Panneau de test exploratoire — l'API de diffusion DiDo du SDES "
+        "(permis de construire/démolir, base Sitadel) est publique et sans "
+        "authentification, mais son fonctionnement réel (identifiants de "
+        "jeux de données, colonnes disponibles pour filtrer) n'a jamais été "
+        "confirmé en conditions réelles. N'affecte rien d'autre dans l'appli."
+    )
+    import requests as _requests_diag_sitadel
+    import json as _json_diag_sitadel
+
+    DIDO_API_BASE = "https://data.statistiques.developpement-durable.gouv.fr/dido/api/v1"
+
+    terme_recherche_sitadel = st.text_input(
+        "Terme de recherche du jeu de données", value="permis de construire",
+    )
+    tester_recherche_datafiles = st.button(
+        "1. Chercher les jeux de données correspondants", use_container_width=True,
+    )
+
+    rid_datafile_sitadel = st.text_input(
+        "2. Identifiant (rid) du fichier de données à interroger",
+        value="",
+        help="À remplir une fois trouvé à l'étape 1 (colonne 'id' ou 'rid' du résultat).",
+    )
+    code_commune_sitadel = st.text_input("Code commune (INSEE) de test", value="94028")
+    colonne_commune_sitadel = st.text_input(
+        "Nom de la colonne commune à filtrer (à ajuster selon le schéma réel)",
+        value="COMMUNE",
+    )
+    tester_requete_filtree = st.button(
+        "3. Tester une requête filtrée sur ce rid", use_container_width=True,
+    )
+
+    _rapport_sitadel = [f"Recherche : {terme_recherche_sitadel}", ""]
+
+    if tester_recherche_datafiles:
+        url_dido = f"{DIDO_API_BASE}/datafiles"
+        _rapport_sitadel.append(f"URL : {url_dido}?text={terme_recherche_sitadel}")
+        try:
+            reponse = _requests_diag_sitadel.get(
+                url_dido, params={"text": terme_recherche_sitadel}, timeout=20,
+            )
+            st.write(f"Statut HTTP : {reponse.status_code}")
+            _rapport_sitadel.append(f"Statut HTTP : {reponse.status_code}")
+            try:
+                data = reponse.json()
+                resultats = data.get("data", data) if isinstance(data, dict) else data
+                if isinstance(resultats, list) and resultats:
+                    st.success(f"{len(resultats)} jeu(x) de données trouvé(s).")
+                    st.dataframe(pd.DataFrame(resultats), use_container_width=True)
+                    _rapport_sitadel.append(f"{len(resultats)} résultat(s) :")
+                    _rapport_sitadel.append(
+                        _json_diag_sitadel.dumps(resultats, ensure_ascii=False, indent=2)
+                    )
+                else:
+                    st.warning("Aucun résultat, ou forme de réponse inattendue :")
+                    st.json(data)
+                    _rapport_sitadel.append("Aucun résultat / forme inattendue :")
+                    _rapport_sitadel.append(_json_diag_sitadel.dumps(data, ensure_ascii=False, indent=2))
+            except ValueError:
+                st.error("Réponse non-JSON :")
+                st.code(reponse.text[:2000])
+                _rapport_sitadel.append("Réponse non-JSON :")
+                _rapport_sitadel.append(reponse.text[:2000])
+        except _requests_diag_sitadel.exceptions.RequestException as e:
+            st.error(f"Échec de l'appel réseau : {e}")
+            _rapport_sitadel.append(f"Échec de l'appel réseau : {e}")
+
+    if tester_requete_filtree:
+        if not rid_datafile_sitadel:
+            st.error("Renseigne d'abord un identifiant (rid) à l'étape 2.")
+        else:
+            url_millesime = f"{DIDO_API_BASE}/datafiles/{rid_datafile_sitadel}"
+            _rapport_sitadel.append(f"URL (métadonnées millésime) : {url_millesime}")
+            try:
+                reponse_meta = _requests_diag_sitadel.get(url_millesime, timeout=20)
+                st.write(f"Statut HTTP (métadonnées) : {reponse_meta.status_code}")
+                _rapport_sitadel.append(f"Statut HTTP (métadonnées) : {reponse_meta.status_code}")
+                meta = reponse_meta.json() if reponse_meta.status_code == 200 else {}
+                if meta:
+                    st.write("Métadonnées du dernier millésime :")
+                    st.json(meta)
+                    _rapport_sitadel.append(_json_diag_sitadel.dumps(meta, ensure_ascii=False, indent=2))
+
+                url_donnees = f"{DIDO_API_BASE}/datafiles/{rid_datafile_sitadel}/json"
+                params_donnees = {colonne_commune_sitadel: f"eq:{code_commune_sitadel}"}
+                st.write(f"URL données filtrées : {url_donnees}")
+                st.write(f"Paramètres : {params_donnees}")
+                _rapport_sitadel.append(f"URL données filtrées : {url_donnees}")
+                _rapport_sitadel.append(f"Paramètres : {params_donnees}")
+                reponse_donnees = _requests_diag_sitadel.get(
+                    url_donnees, params=params_donnees, timeout=20,
+                )
+                st.write(f"Statut HTTP (données) : {reponse_donnees.status_code}")
+                _rapport_sitadel.append(f"Statut HTTP (données) : {reponse_donnees.status_code}")
+                try:
+                    data_donnees = reponse_donnees.json()
+                    lignes = data_donnees.get("data", data_donnees) if isinstance(data_donnees, dict) else data_donnees
+                    if isinstance(lignes, list) and lignes:
+                        st.success(f"{len(lignes)} ligne(s) trouvée(s).")
+                        st.write("Colonnes disponibles (première ligne) :")
+                        st.code(sorted(lignes[0].keys()))
+                        st.dataframe(pd.DataFrame(lignes).head(20), use_container_width=True)
+                        _rapport_sitadel.append(f"{len(lignes)} ligne(s). Colonnes :")
+                        _rapport_sitadel.append(str(sorted(lignes[0].keys())))
+                        _rapport_sitadel.append(
+                            _json_diag_sitadel.dumps(lignes[:5], ensure_ascii=False, indent=2)
+                        )
+                    else:
+                        st.warning("Aucune ligne, ou forme de réponse inattendue :")
+                        st.json(data_donnees)
+                        _rapport_sitadel.append("Aucune ligne / forme inattendue :")
+                        _rapport_sitadel.append(
+                            _json_diag_sitadel.dumps(data_donnees, ensure_ascii=False, indent=2)
+                        )
+                except ValueError:
+                    st.error("Réponse non-JSON (données) :")
+                    st.code(reponse_donnees.text[:2000])
+                    _rapport_sitadel.append("Réponse non-JSON (données) :")
+                    _rapport_sitadel.append(reponse_donnees.text[:2000])
+            except _requests_diag_sitadel.exceptions.RequestException as e:
+                st.error(f"Échec de l'appel réseau : {e}")
+                _rapport_sitadel.append(f"Échec de l'appel réseau : {e}")
+
+    if tester_recherche_datafiles or tester_requete_filtree:
+        st.divider()
+        st.markdown("**📋 Copier ce diagnostic**")
+        texte_complet_sitadel = "\n".join(_rapport_sitadel)
+        st.code(texte_complet_sitadel, language="text")
+        st.download_button(
+            "⬇️ Télécharger ce diagnostic (.txt)",
+            texte_complet_sitadel,
+            file_name="diagnostic_sitadel_dido.txt",
+            use_container_width=True,
+        )
+
 st.title("ImmoScan — France entière")
 st.caption("Détection d'opportunités immobilières à partir des transactions réelles DVF, avec historique probable du bien et vues géographiques.")
 
