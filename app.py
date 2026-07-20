@@ -1659,9 +1659,14 @@ with tab_recherche:
                 )
             if permis is None or permis.empty:
                 st.caption(
-                    "Aucun permis de construire, d'aménager, de démolir ou "
-                    "déclaration préalable connu pour cette parcelle depuis "
-                    "2013 (données Sitadel, SDES)."
+                    "Aucun permis trouvé pour cette parcelle dans l'open data "
+                    "Sitadel depuis 2013. ⚠️ Ce jeu de données exclut "
+                    "volontairement (documentation officielle du SDES) toute "
+                    "demande ne créant aucune surface de plancher — ex. une "
+                    "simple déclaration préalable pour ouverture de fenêtres "
+                    "n'y figurera jamais, même si elle existe bien en mairie. "
+                    "Absence ici ne veut donc pas dire absence réelle pour "
+                    "les projets sans création de surface."
                 )
             else:
                 colonnes_utiles = [
@@ -1679,7 +1684,13 @@ with tab_recherche:
                     "TYPE_DAU : PC = permis de construire, DP = déclaration "
                     "préalable, PA = permis d'aménager, PD = permis de "
                     "démolir. Correspondance par parcelle cadastrale exacte "
-                    "(fiable), pas par adresse."
+                    "(fiable), pas par adresse. Ce jeu de données exclut par "
+                    "construction toute demande ne créant pas de surface de "
+                    "plancher (ex. simple modification de façade) — et, par "
+                    "ailleurs, le SDES précise que les permis de démolir, "
+                    "bien qu'enregistrés dans Sitadel, ne sont pas "
+                    "systématiquement diffusés en open data : leur absence "
+                    "ici n'exclut pas qu'un permis de démolir existe réellement."
                 )
 
         if suggested_surface and suggested_type:

@@ -2228,6 +2228,17 @@ def find_permis_urbanisme(code_insee: str, section: str, numero_parcelle: str) -
     Ne précise pas de `millesime` dans l'URL : la doc DiDo confirme que le
     dernier millésime disponible est utilisé par défaut, donc toujours à
     jour sans avoir à gérer un cycle de rafraîchissement nous-mêmes.
+
+    LIMITE DE PÉRIMÈTRE CONFIRMÉE (méthodologie officielle SDES, vérifiée le
+    20/07/2026) : cet open data EXCLUT volontairement toute demande ne
+    créant aucune surface de plancher — une simple déclaration préalable
+    (ex. ouverture de fenêtres, ravalement) n'y figurera JAMAIS, même si
+    elle existe réellement en mairie. Par ailleurs, les permis de démolir
+    (PD), bien qu'enregistrés dans Sitadel, "ne sont pas statistiquement
+    exploités et ne font l'objet d'aucune diffusion au niveau agrégé" selon
+    le SDES lui-même — leur présence dans cette source n'est donc pas
+    garantie même quand ils existent réellement. Une absence de résultat ne
+    doit jamais être présentée comme une absence réelle de permis.
     """
     import requests
 
