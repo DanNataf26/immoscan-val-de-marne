@@ -2638,6 +2638,55 @@ def get_batiment_bdnb(
 # 4. Score d'une annonce / d'un bien repéré
 # ----------------------------------------------------------------------------
 
+def estimate_property_value(commune: str, type_local: str, surface: float,
+                             dept: str = "94") -> dict:
+    """
+    Estime la valeur de marché d'un bien à partir du prix médian/m² de
+    référence (commune + type de bien), SANS exiger de prix affiché en
+    entrée — contrairement à score_property(), qui ne fait que comparer un
+    prix déjà connu au marché. Utile pour une première estimation avant
+    même d'avoir une annonce sous les yeux.
+
+    La fourchette (basse/haute) utilise l'écart-type du prix/m² observé
+    dans les transactions de référence — une approximation simple et
+    transparente (pas un modèle statistique sophistiqué type AVM), cohérente
+    avec la philosophie du projet : montrer les faits du marché réel, pas
+    deviner un chiffre unique avec une fausse précision.
+    """
+    ref_path = OUTPUT_DIR / f"reference_{dept}.csv"
+    if not ref_path.exists():
+        raise SystemExit(
+            f"Référence introuvable ({ref_path}). Lancez d'abord 'reference'."
+        )
+    ref = pd.read_csv(ref_path)
+    row = ref[(ref["nom_commune"].str.lower() == commune.lower())
+              & (ref["type_local"] == type_local)]
+
+    if row.empty:
+        return {
+            "commune": commune, "type_local": type_local,
+            "erreur": "Pas assez de transactions de référence pour ce couple "
+                      "commune/type de bien. Essayez une commune voisine ou "
+                      "vérifiez l'orthographe exacte (voir reference_94.csv)."
+        }
+
+    ref_m2 = float(row.iloc[0]["prix_m2_median"])
+    ecart_type = row.iloc[0].get("ecart_type")
+    ecart_type = float(ecart_type) if pd.notna(ecart_type) else 0.0
+    nb_transac = int(row.iloc[0]["nb_transactions"])
+
+    return {
+        "commune": commune,
+        "type_local": type_local,
+        "surface_m2": surface,
+        "prix_m2_reference": round(ref_m2),
+        "valeur_estimee": round(ref_m2 * surface),
+        "valeur_basse": round(max(ref_m2 - ecart_type, 0) * surface),
+        "valeur_haute": round((ref_m2 + ecart_type) * surface),
+        "nb_transactions_reference": nb_transac,
+    }
+
+
 def score_property(commune: str, type_local: str, surface: float, prix: float,
                     dept: str = "94") -> dict:
     ref_path = OUTPUT_DIR / f"reference_{dept}.csv"

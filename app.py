@@ -1849,16 +1849,47 @@ with tab_recherche:
             if not surface:
                 st.warning("Renseignez au moins la surface pour lancer l'analyse.")
             else:
-                # --- Score marché (si commune dispo et prix renseigné) -----
-                st.markdown("#### 📊 Score vs marché")
+                # --- Estimation du marché, toujours affichée dès que la ------
+                # --- commune/le type sont connus, sans exiger de prix -------
+                st.markdown("#### 💰 Estimation du marché")
                 if not commune_score:
                     st.caption("Référence de prix indisponible pour ce département.")
-                elif not prix:
-                    st.caption(
-                        "ℹ️ Prix non renseigné : score marché non calculé "
-                        "(le potentiel caché ci-dessous reste disponible)."
-                    )
                 else:
+                    estimation = core.estimate_property_value(
+                        commune_score, type_local, surface, dept=active_dept
+                    )
+                    if "erreur" in estimation:
+                        st.error(estimation["erreur"])
+                    else:
+                        st.metric(
+                            "Valeur estimée",
+                            f"{estimation['valeur_estimee']:,.0f} €",
+                            help="Prix médian/m² de référence × surface renseignée.",
+                        )
+                        ec1, ec2, ec3 = st.columns(3)
+                        ec1.metric("Fourchette basse", f"{estimation['valeur_basse']:,.0f} €")
+                        ec2.metric("Fourchette haute", f"{estimation['valeur_haute']:,.0f} €")
+                        ec3.metric("Transactions", estimation["nb_transactions_reference"])
+                        st.caption(
+                            f"Basée sur le prix médian/m² à {commune_score} pour "
+                            f"des biens de type « {type_local} » "
+                            f"({estimation['prix_m2_reference']:,} €/m²), ± l'écart-"
+                            "type observé sur les transactions de référence — une "
+                            "fourchette simple et transparente, pas un modèle "
+                            "statistique sophistiqué. Ne remplace pas une visite, "
+                            "l'état du bien ou les travaux éventuels."
+                        )
+                        dpe_info = core.interpret_dpe_classe(dpe)
+                        if dpe_info:
+                            classe_str = dpe_info["classe_energie"]
+                            if dpe_info["classe_ges"]:
+                                classe_str += f" / GES {dpe_info['classe_ges']}"
+                            st.caption(f"💡 DPE {classe_str} — {dpe_info['note']}")
+
+                # --- Score vs prix affiché, seulement si un prix est --------
+                # --- renseigné : comparaison OPTIONNELLE en complément ------
+                if commune_score and prix:
+                    st.markdown("#### 📊 Comparaison à un prix affiché")
                     result = core.score_property(commune_score, type_local, surface, prix, dept=active_dept)
                     if "erreur" in result:
                         st.error(result["erreur"])
@@ -1875,12 +1906,6 @@ with tab_recherche:
                             "Ce score compare uniquement le prix au m². Il ne "
                             "remplace pas l'analyse travaux, urbanisme et liquidité."
                         )
-                        dpe_info = core.interpret_dpe_classe(dpe)
-                        if dpe_info:
-                            classe_str = dpe_info["classe_energie"]
-                            if dpe_info["classe_ges"]:
-                                classe_str += f" / GES {dpe_info['classe_ges']}"
-                            st.caption(f"💡 DPE {classe_str} — {dpe_info['note']}")
 
                 st.divider()
 
