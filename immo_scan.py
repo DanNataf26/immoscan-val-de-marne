@@ -2205,6 +2205,76 @@ SITADEL_RID_LOGEMENTS = "8b35affb-55fc-4c1f-915b-7750f974446a"
 SITADEL_RID_LOCAUX = "f8f0700f-806c-40a7-83b1-f21cf507e7c4"
 
 
+def find_ecoles_proches(
+    lat: float, lon: float, code_postal: str | None, rayon_m: float = 2000,
+) -> pd.DataFrame | None:
+    """
+    Cherche les établissements scolaires (premier et second degré, publics
+    et privés) les plus proches d'un point, via l'Annuaire de l'Éducation
+    nationale (API publique, sans authentification) — 66 000+
+    établissements géolocalisés.
+
+    Schéma confirmé par deux sources indépendantes réelles (atelier
+    officiel type SSPHub/INSEE, intégration Grist en production) le
+    22/07/2026 — pas testé en direct depuis cet environnement (pas d'accès
+    réseau), mais champs corroborés deux fois séparément :
+    code_postal, nom_commune, latitude/longitude (en WGS84 direct, PAS en
+    Lambert93 contrairement à la BDNB), type_etablissement, libelle_nature,
+    statut_public_prive.
+
+    Filtre d'abord par code postal côté serveur (réduit à quelques dizaines
+    d'établissements, pas les 66 000 de toute la France), puis calcule la
+    distance réelle à chacun côté client — même logique que pour les ventes
+    comparables (find_comparables) — pour ne garder que les plus proches.
+    Un code postal peut chevaucher plusieurs communes en zone urbaine dense
+    (ou une commune plusieurs codes postaux) : approximation à affiner si
+    besoin, comme pour les autres filtrages géographiques de ce projet.
+    """
+    import requests
+
+    if not code_postal:
+        return None
+
+    try:
+        resp = requests.get(
+            "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/"
+            "fr-en-annuaire-education/records",
+            params={
+                "where": f'code_postal="{code_postal}"',
+                "select": (
+                    "nom_etablissement,type_etablissement,libelle_nature,"
+                    "statut_public_prive,adresse_1,code_postal,nom_commune,"
+                    "latitude,longitude"
+                ),
+                "limit": 100,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        records = resp.json().get("results", [])
+    except Exception as exc:
+        print(f"[warn] Annuaire éducation échoué pour code_postal={code_postal} : {exc}")
+        return None
+
+    if not records:
+        return None
+
+    lignes = []
+    for r in records:
+        r_lat, r_lon = r.get("latitude"), r.get("longitude")
+        if r_lat is None or r_lon is None:
+            continue
+        d = haversine_m(lat, lon, float(r_lat), float(r_lon))
+        if d <= rayon_m:
+            r["distance_m"] = round(d)
+            lignes.append(r)
+
+    if not lignes:
+        return None
+    return pd.DataFrame(lignes).sort_values("distance_m").reset_index(drop=True)
+
+
+
 def find_permis_urbanisme(code_insee: str, section: str, numero_parcelle: str) -> pd.DataFrame | None:
     """
     Cherche les permis de construire/démolir/aménager et déclarations
