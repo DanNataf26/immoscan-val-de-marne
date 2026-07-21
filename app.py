@@ -1240,6 +1240,62 @@ with tab_recherche:
             except SystemExit as e:
                 st.warning(str(e))
 
+        st.divider()
+        st.markdown("### 🏘️ Quartier et environnement")
+        st.caption(
+            "Informations sur le secteur, valables pour n'importe quel bien "
+            "aux alentours — à distinguer de la fiche du bien précis ci-dessous."
+        )
+
+        st.subheader("Écoles à proximité")
+        with st.spinner("Recherche des établissements scolaires..."):
+            ecoles = core.find_ecoles_proches(
+                geo["latitude"], geo["longitude"], geo.get("code_postal"),
+            )
+        if ecoles is None or ecoles.empty:
+            st.caption(
+                "Aucun établissement scolaire trouvé dans un rayon de 2 km "
+                "(données Annuaire de l'Éducation nationale)."
+            )
+        else:
+            for niveau in ["ECOLE", "COLLEGE", "LYCEE"]:
+                sous_ensemble = ecoles[
+                    ecoles["type_etablissement"].astype(str).str.upper().str.contains(niveau)
+                ].head(3)
+                if sous_ensemble.empty:
+                    continue
+                libelle_niveau = {
+                    "ECOLE": "Écoles", "COLLEGE": "Collèges", "LYCEE": "Lycées",
+                }[niveau]
+                st.markdown(f"**{libelle_niveau}**")
+                for _, e in sous_ensemble.iterrows():
+                    statut = f" ({e['statut_public_prive']})" if pd.notna(e.get("statut_public_prive")) else ""
+                    st.write(f"— {e['nom_etablissement']}{statut} · {e['distance_m']:.0f} m")
+            autres = ecoles[
+                ~ecoles["type_etablissement"].astype(str).str.upper().str.contains(
+                    "ECOLE|COLLEGE|LYCEE", regex=True
+                )
+            ]
+            if not autres.empty:
+                with st.expander(f"Autres établissements trouvés ({len(autres)})"):
+                    st.dataframe(
+                        autres[["nom_etablissement", "type_etablissement", "distance_m"]],
+                        use_container_width=True,
+                    )
+            st.caption(
+                "Source : Annuaire de l'Éducation nationale (66 000+ "
+                "établissements publics et privés). Recherche filtrée par "
+                "code postal puis par distance réelle — un code postal peut "
+                "chevaucher plusieurs communes en zone urbaine dense."
+            )
+
+        st.divider()
+        st.markdown("### 🏠 Fiche technique de ce bien précis")
+        st.caption(
+            "Informations propres à cette adresse ou cette parcelle "
+            "précisément — à distinguer du quartier ci-dessus."
+        )
+
         # --- DPE -----------------------------------------------------------
         st.subheader("DPE enregistré à cette adresse")
         with st.spinner("Recherche DPE ADEME..."):
